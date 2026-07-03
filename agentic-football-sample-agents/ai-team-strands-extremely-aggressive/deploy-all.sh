@@ -57,7 +57,7 @@ if ! command -v aws &> /dev/null; then
 fi
 echo "  aws CLI: OK"
 
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) || {
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null | tr -d ' \r\n') || {
   echo "ERROR: No valid AWS credentials."
   exit 1
 }
@@ -101,6 +101,9 @@ for agent in "${AGENTS[@]}"; do
     -e "s|\${AWS_ACCOUNT_ID}|$AWS_ACCOUNT_ID|g" \
     -e "s|\${AWS_DEFAULT_REGION}|$AWS_DEFAULT_REGION|g" \
     "$AGENT_SRC/.bedrock_agentcore.yaml.template" > "$STAGE/.bedrock_agentcore.yaml"
+  # uv cross-compile omits console scripts (opentelemetry-instrument) from bin/;
+  # disable observability so the runtime entrypoint does not require OTEL executables.
+  sed -i 's/^\([[:space:]]*enabled:[[:space:]]*\)true/\1false/' "$STAGE/.bedrock_agentcore.yaml"
 
   echo "  Deploying from: $STAGE"
   if (cd "$STAGE" && agentcore deploy --auto-update-on-conflict); then
