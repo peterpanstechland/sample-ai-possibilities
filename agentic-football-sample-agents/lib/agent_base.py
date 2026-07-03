@@ -10,10 +10,19 @@ from state import summarize_state
 from fallback import FallbackConfig, build_last_resort
 
 
-def create_agent(system_prompt: str, model_id: str = "us.amazon.nova-micro-v1:0") -> Agent:
-    """Create a Strands Agent with the given system prompt."""
-    model = BedrockModel(model_id=model_id)
-    return Agent(model=model, system_prompt=system_prompt)
+def create_agent(
+    system_prompt: str,
+    model_id: str = "us.amazon.nova-micro-v1:0",
+    temperature: float = 0.2,
+    max_tokens: int = 200,
+) -> Agent:
+    """Create a Strands Agent with the given system prompt.
+
+    Low temperature + small max_tokens: the expected output is a single short
+    JSON command, so capping output length bounds worst-case latency.
+    """
+    model = BedrockModel(model_id=model_id, temperature=temperature, max_tokens=max_tokens)
+    return Agent(model=model, system_prompt=system_prompt, callback_handler=None)
 
 
 def create_invoke_handler(
@@ -52,6 +61,9 @@ def create_invoke_handler(
             )
             log.info(f"{position_label} agent invoked for team {team_id}, controlling player {effective_pid}")
 
+            # Reset conversation history: each tick is independent, and letting
+            # history accumulate in the warm runtime grows prefill latency every call.
+            agent.messages = []
             response = agent(state_summary)
             response_text = str(response)
 

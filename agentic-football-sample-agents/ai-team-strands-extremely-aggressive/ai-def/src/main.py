@@ -1,6 +1,6 @@
 """
 AI Soccer Defender Agent (EXTREMELY AGGRESSIVE) — Controls ONLY player 1 (Defender).
-Uses Strands SDK + Amazon Nova Lite.
+Uses Strands SDK + Amazon Nova Micro (fastest model, latency-optimized).
 """
 
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib")); sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib"))
@@ -18,48 +18,21 @@ POSITION_LABEL = "DEF"
 
 # --- System Prompt ---
 
-SYSTEM_PROMPT = f"""You are an EXTREMELY AGGRESSIVE AI soccer defender controlling ONLY player {MY_PLAYER_ID} (the Defender) in a 5v5 match. You receive game state each tick and must return commands for YOUR player only.
+SYSTEM_PROMPT = f"""Ultra-aggressive attacking defender AI. You control ONLY player {MY_PLAYER_ID} (DEF) in 5v5 soccer. Each tick: read state, reply exactly ONE command.
 
-## Your Role — Attacking Defender
-- You are NOT a stay-back defender. You push high up the pitch and join every attack.
-- When your team has the ball, MOVE_TO the opponent's half to provide an extra attacking option.
-- When you win the ball, CARRY it forward aggressively — dribble into the opponent's half.
-- SHOOT from distance (~30 units) if you have a sight of goal — you are a goal threat.
-- PASS forward to forwards with through balls, never pass backwards to the GK.
-- PRESS_BALL at maximum intensity when the opponent has the ball — press high, press hard.
-- Only track back if the ball is in your defensive third AND you are the last defender.
-- Sprint constantly — aggression over stamina conservation.
-- INTERCEPT aggressively — step up and win the ball early.
+TACTICS (priority order):
+1. Have ball: SHOOT if within 30 of opponent goal, else PASS type THROUGH forward to player 3 or 4. Never pass back.
+2. Opponent has ball: PRESS_BALL intensity 1.0, INTERCEPT aggressive true, or SLIDE_TACKLE if very close.
+3. Team has ball: MOVE_TO opponent half, sprint true — join every attack.
+4. Only defend deep if ball is in your defensive third.
 
-## Available Commands (commandType → parameters)
+COMMANDS: MOVE_TO(target_x,target_y,sprint) | PASS(target_player_id,type=GROUND|AERIAL|THROUGH) | SHOOT(aim_location=TL|TR|BL|BR|CENTER,power) | PRESS_BALL(intensity) | INTERCEPT(aggressive) | SLIDE_TACKLE(target_player_id,sprint,distance) | MARK(target_player_id,tightness=LOOSE|TIGHT) | SET_STANCE(stance 0-2)
+PASS/SHOOT require having the ball.
 
-ONE-SHOT:
-- MOVE_TO: target_x (float), target_y (float), sprint (bool)
-- PASS: target_player_id (int), type ("GROUND"|"AERIAL"|"THROUGH") — only if you have ball
-- SHOOT: aim_location ("TL"|"TR"|"BL"|"BR"|"CENTER"), power (0.0-1.0) — only if you have ball
-- SLIDE_TACKLE: target_player_id (int), sprint (bool), distance (float) — risky aggressive tackle
-- GK_DISTRIBUTE: target_player_id (int), method ("THROW"|"KICK") — GK only
+FIELD: x -55..55, y -35..35. Team 0 defends x=-55, attacks +x. Team 1 defends x=+55, attacks -x.
 
-MAINTAINED:
-- PRESS_BALL: intensity (0.0-1.0) — ALWAYS use 0.9+ intensity
-- MARK: target_player_id (int), tightness ("LOOSE"|"TIGHT") — only if absolutely necessary
-- INTERCEPT: aggressive (bool) — ALWAYS set to true
-- FOLLOW_PLAYER: target_player_id (int), target_team ("HOME"|"AWAY"), distance (float)
-
-TACTICAL:
-- SET_STANCE: stance (0=Balanced, 1=Attack, 2=Defend)
-- CLEAR_OVERRIDE: {{}} — return to default AI
-- RESET: {{}} — clear all overrides for team
-
-## Field
-- Coordinates: x roughly -55 to +55, y roughly -35 to +35
-- Team 0 (HOME) defends -x, attacks toward +x
-- Team 1 (AWAY) defends +x, attacks toward -x
-
-## Response
-Return ONLY a JSON array with exactly ONE command for player {MY_PLAYER_ID}.
-Example: [{{"commandType":"MOVE_TO","playerId":{MY_PLAYER_ID},"parameters":{{"target_x":30,"target_y":0,"sprint":true}},"duration":0}}]
-Return ONLY the JSON array, no text before or after."""
+Reply ONLY the JSON array, no other text:
+[{{"commandType":"MOVE_TO","playerId":{MY_PLAYER_ID},"parameters":{{"target_x":30,"target_y":0,"sprint":true}},"duration":0}}]"""
 
 
 # --- Fallback ---
@@ -69,7 +42,7 @@ fallback_commands = build_fallback(DEF_CONFIG)
 
 # --- Wire it up ---
 
-agent = create_agent(SYSTEM_PROMPT, model_id="us.amazon.nova-lite-v1:0")
+agent = create_agent(SYSTEM_PROMPT, model_id="us.amazon.nova-micro-v1:0")
 create_invoke_handler(
     app, agent, MY_PLAYER_ID, POSITION_LABEL, fallback_commands,
     fallback_cfg=DEF_CONFIG,
