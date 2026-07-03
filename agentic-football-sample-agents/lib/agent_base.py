@@ -6,6 +6,7 @@ from strands import Agent
 from strands.models import BedrockModel
 
 from parsing import parse_commands
+from pattern_tracker import PatternTracker
 from state import summarize_state
 from fallback import FallbackConfig, build_last_resort
 
@@ -42,6 +43,7 @@ def create_invoke_handler(
     """
     log = app.logger
     last_resort = build_last_resort(fallback_cfg, my_player_id)
+    tracker = PatternTracker()
 
     @app.entrypoint
     async def invoke(payload, context):
@@ -59,11 +61,23 @@ def create_invoke_handler(
             state_summary = summarize_state(
                 game_state, team_id, effective_pid, position_label
             )
+
+            # Cross-tick scouting memory: cheap in-process counters distilled
+            # into a few lines (opponent main threat, favored side, GK outlet,
+            # score situation) — pattern recall without context growth.
+            tracker.update(game_state, team_id)
+            scout = tracker.report(game_state, team_id, position_label)
+            if scout:
+                state_summary = f"{state_summary}\n\n{scout}"
+
             log.info(f"{position_label} agent invoked for team {team_id}, controlling player {effective_pid}")
 
-            # Reset conversation history: each tick is independent, and letting
-            # history accumulate in the warm runtime grows prefill latency every call.
-            agent.messages = []
+            # Reset conversation history for memoryless agents: each tick is
+            # independent, and history accumulating in the warm runtime grows
+            # prefill latency every call. Memory-backed agents (session manager
+            # present) keep their windowed history — that is their feature.
+            if getattr(agent, "_session_manager", None) is None:
+                agent.messages = []
             response = agent(state_summary)
             response_text = str(response)
 

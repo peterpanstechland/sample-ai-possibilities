@@ -230,8 +230,13 @@ choco install zip -y
 # 在项目根目录 agentic-football-sample-agents 下执行
 wsl bash /mnt/c/Users/<你>/Documents/robomon/sample-ai-possibilities/agentic-football-sample-agents/deploy-wsl.sh
 
+# 选择队伍：balanced（默认）/ aggressive / memory
+wsl bash .../deploy-wsl.sh aggressive
+wsl bash .../deploy-wsl.sh memory          # Memory 队（首次会自动创建 Memory 资源）
+
 # 仅部署单个 agent
 wsl bash .../deploy-wsl.sh ai-gk
+wsl bash .../deploy-wsl.sh memory ai-gk
 ```
 
 `deploy-wsl.sh` 会自动完成：

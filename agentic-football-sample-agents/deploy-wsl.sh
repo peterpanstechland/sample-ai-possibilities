@@ -31,10 +31,15 @@ if [ ! -d "$ROOT/.venv-linux" ]; then
 else
   source "$ROOT/.venv-linux/bin/activate"
 fi
+# Memory team needs the bedrock-agentcore SDK (MemoryClient) for create_memory.py
+python3 -c "import bedrock_agentcore.memory" 2>/dev/null || pip install -q bedrock-agentcore
 
 TEAM_DIR="${TEAM_DIR:-ai-team-strands-balanced}"
 if [ "$1" = "aggressive" ] || [ "$1" = "agg" ]; then
   TEAM_DIR="ai-team-strands-extremely-aggressive"
+  shift
+elif [ "$1" = "memory" ] || [ "$1" = "mem" ]; then
+  TEAM_DIR="ai-team-strands-memory"
   shift
 elif [ "$1" = "balanced" ] || [ "$1" = "bal" ]; then
   TEAM_DIR="ai-team-strands-balanced"

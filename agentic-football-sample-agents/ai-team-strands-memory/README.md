@@ -17,6 +17,22 @@ Key differences:
 - System prompts instruct agents to leverage recalled history
 - Requires `MEMORY_ID` environment variable (created once per deployment)
 
+## Latency/Win-rate Tuning (this fork)
+
+Raw history replay is slow and low-signal, so memory is split into two layers:
+
+- **Short window (STM)**: `SlidingWindowConversationManager` keeps only the last
+  ~5 ticks in context; `batch_size=2` merges each tick's user+assistant pair into
+  one Memory write instead of two synchronous calls.
+- **Match-long patterns**: `lib/pattern_tracker.py` accumulates opponent stats
+  in-process (main ball carrier, favored attacking side, their GK's usual outlet,
+  score situation) and injects a <=4-line SCOUTING REPORT into every prompt.
+  Zero network calls, zero context growth.
+- All agents run Nova Micro with `temperature=0.2`, `max_tokens=200`, and the
+  aggressive team's compressed prompts (+ memory usage instructions).
+- `MATCH_TAG` env var (optional) isolates sessions per match so one match's
+  history cannot pollute the next; `TEAM_ID` scopes actor/session ids.
+
 ## Architecture
 
 ```

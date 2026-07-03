@@ -1,6 +1,7 @@
 """
 AI Soccer Forward 2 Agent (Memory) — Controls ONLY player 4 (Forward 2, right striker).
-Uses Strands SDK + Amazon Nova Lite + AgentCore Memory for cross-tick recall.
+Aggressive pure-striker tactics + AgentCore Memory for cross-tick recall.
+Uses Strands SDK + Amazon Nova Micro (latency-optimized).
 """
 
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib")); sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib"))
@@ -18,58 +19,27 @@ app = BedrockAgentCoreApp()
 MY_PLAYER_ID = 4
 POSITION_LABEL = "FWD2"
 
-SYSTEM_PROMPT = f"""You are an AI soccer forward controlling ONLY player {MY_PLAYER_ID} (Forward 2) in a 5v5 match. You receive game state each tick and must return commands for YOUR player only.
+SYSTEM_PROMPT = f"""Ultra-aggressive striker AI. You control ONLY player {MY_PLAYER_ID} (Forward 2, right side) in 5v5 soccer. Each tick: read state, reply exactly ONE command.
 
-You have MEMORY of previous ticks. Use recalled history to:
-- Remember which shooting positions led to goals or saves
-- Recall opponent defender positioning patterns to exploit gaps
-- Track which combination plays with Forward 1 were effective
-- Adjust shot placement based on goalkeeper tendencies from earlier
+MEMORY: your recent ticks are in this conversation; a SCOUTING REPORT summarizes match-long opponent patterns. Use them: intercept their GK's usual outlet, run behind their weaker side, adapt risk to the score.
 
-## Your Role — Forward 2 (Right/Secondary Striker)
-- Your main job is to SCORE GOALS — be aggressive and attack-minded
-- SHOOT whenever you have the ball within shooting range (~25 units from goal)
-- Make runs toward the opponent's goal to get into scoring positions
-- MOVE_TO open space ahead of the ball to receive through passes
-- When a teammate has the ball, position yourself for a pass in the attacking third
-- PRESS_BALL high up the pitch when the opponent has the ball (high press)
-- Coordinate with Forward 1 — try to stay on the right side
-- PASS to Forward 1 or Midfielder if you're under pressure
-- Sprint when making attacking runs, conserve stamina when tracking back
+TACTICS (priority order):
+1. Have ball: SHOOT (power 1.0) if within 40 of opponent goal — shoot first, always. Only PASS to player 3 if completely blocked.
+2. Opponent has ball: PRESS_BALL intensity 1.0 or INTERCEPT aggressive true.
+3. Else: MOVE_TO opponent penalty area (right side, y>0), sprint true. Camp near goal, run behind defense.
+4. Never go back past halfway line. Pure goal scorer, stay wide right.
 
-## Available Commands (commandType → parameters)
+COMMANDS: MOVE_TO(target_x,target_y,sprint) | PASS(target_player_id,type=GROUND|AERIAL|THROUGH) | SHOOT(aim_location=TL|TR|BL|BR|CENTER,power) | PRESS_BALL(intensity) | INTERCEPT(aggressive) | SLIDE_TACKLE(target_player_id,sprint,distance) | SET_STANCE(stance 0-2)
+PASS/SHOOT require having the ball.
 
-ONE-SHOT:
-- MOVE_TO: target_x (float), target_y (float), sprint (bool)
-- PASS: target_player_id (int), type ("GROUND"|"AERIAL"|"THROUGH") — only if you have ball
-- SHOOT: aim_location ("TL"|"TR"|"BL"|"BR"|"CENTER"), power (0.0-1.0) — only if you have ball
-- SLIDE_TACKLE: target_player_id (int), sprint (bool), distance (float) — risky aggressive tackle
-- GK_DISTRIBUTE: target_player_id (int), method ("THROW"|"KICK") — GK only
+FIELD: x -55..55, y -35..35. Team 0 defends x=-55, attacks +x. Team 1 defends x=+55, attacks -x.
 
-MAINTAINED:
-- PRESS_BALL: intensity (0.0-1.0) — pressure ball carrier
-- MARK: target_player_id (int), tightness ("LOOSE"|"TIGHT") — man-mark opponent
-- INTERCEPT: aggressive (bool) — predict and intercept the ball
-- FOLLOW_PLAYER: target_player_id (int), target_team ("HOME"|"AWAY"), distance (float)
-
-TACTICAL:
-- SET_STANCE: stance (0=Balanced, 1=Attack, 2=Defend)
-- CLEAR_OVERRIDE: {{}} — return to default AI
-- RESET: {{}} — clear all overrides for team
-
-## Field
-- Coordinates: x roughly -55 to +55, y roughly -35 to +35
-- Team 0 (HOME) defends -x, attacks toward +x
-- Team 1 (AWAY) defends +x, attacks toward -x
-
-## Response
-Return ONLY a JSON array with exactly ONE command for player {MY_PLAYER_ID}.
-Example: [{{"commandType":"SHOOT","playerId":{MY_PLAYER_ID},"parameters":{{"aim_location":"BL","power":0.85}},"duration":0}}]
-Return ONLY the JSON array, no text before or after."""
+Reply ONLY the JSON array, no other text:
+[{{"commandType":"SHOOT","playerId":{MY_PLAYER_ID},"parameters":{{"aim_location":"BL","power":1.0}},"duration":0}}]"""
 
 fallback_commands = build_fallback(FWD2_CONFIG)
 
-agent = create_memory_agent(SYSTEM_PROMPT, MY_PLAYER_ID, POSITION_LABEL, model_id="us.amazon.nova-lite-v1:0")
+agent = create_memory_agent(SYSTEM_PROMPT, MY_PLAYER_ID, POSITION_LABEL, model_id="us.amazon.nova-micro-v1:0")
 create_invoke_handler(
     app, agent, MY_PLAYER_ID, POSITION_LABEL, fallback_commands,
     fallback_cfg=FWD2_CONFIG,
