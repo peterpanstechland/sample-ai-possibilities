@@ -84,6 +84,19 @@ def get_possession_info(ball: dict, players: list, team_id: int) -> tuple:
     return None, "free", False
 
 
+def count_opponents_in_our_half(game_state: dict, team_id: int) -> int:
+    """How many opponents have crossed halfway into OUR half (x past ±2).
+
+    3+ means they've committed bodies forward — the trigger for counter-attack
+    mode: defend compact, then beat the vacated space with one fast pass.
+    """
+    my_goal_x, _ = get_goal_positions(team_id)
+    dir_my = 1.0 if my_goal_x > 0 else -1.0
+    opps = [p for p in (game_state.get("players") or []) if not _is_my_team(p, team_id)]
+    return sum(1 for o in opps
+               if ((o.get("position") or {}).get("x", 0) or 0) * dir_my > 2)
+
+
 def possession_context(game_state: dict, team_id: int, my_player_id: int) -> tuple:
     """(has_ball 0/1, dist_to_opp_goal or None) for observability logging.
 
@@ -186,6 +199,17 @@ def summarize_state(
     # Restart situations: act before the opponent settles
     if isinstance(play_mode, str) and play_mode not in ("OPEN_PLAY", "", "0"):
         lines.append(f"RESTART ({play_mode}): ball is in play from a set piece — act FAST, don't stand still.")
+
+    # Opponent has committed players forward -> counter-attack window.
+    # Losses vs attacking bots came from dribbling/blasting out of our own half
+    # into their press; the answer is one fast pass into the space they left.
+    pressure = count_opponents_in_our_half(game_state, team_id)
+    if pressure >= 3:
+        lines.append(
+            f"OPP HIGH PRESS: {pressure} opponents in OUR half — COUNTER-ATTACK: "
+            "defend compact; when we win the ball, ONE fast THROUGH pass to the "
+            "most advanced forward (never dribble out of our half); shoot on "
+            "sight once in range, and take the LONG SHOT if their GK is off his line.")
 
     # Orchestration without messaging: every agent derives the same assignment
     # from the same state, so exactly one player goes to the ball and the rest

@@ -17,7 +17,9 @@ class FallbackConfig:
 
     # What to do when we have the ball
     possession_action: str = "PASS"
-    """One of: GK_DISTRIBUTE, PASS, SHOOT_OR_PASS, SHOOT_OR_ADVANCE."""
+    """One of: GK_DISTRIBUTE, PASS, SHOOT_OR_PASS, SHOOT_OR_ADVANCE, SHOOT.
+    SHOOT fires full power from anywhere — GK/DEF blast rule (doubles as a
+    clearance, no range gate)."""
 
     # Default position when nothing else applies
     default_x_factor: float = 0.0
@@ -239,6 +241,10 @@ def _cmd(cmd_type: str, pid: int, tid: int, params: dict, duration: int = 0) -> 
 
 def _on_ball(cfg, game_state, players, team_id, my_player_id, pos, my_goal_x, opp_goal_x):
     """Handle possession for all position types."""
+    if cfg.possession_action == "SHOOT":
+        return [_cmd("SHOOT", my_player_id, team_id,
+                     {"aim_location": cfg.shoot_aim, "power": cfg.shoot_power})]
+
     if cfg.possession_action == "GK_DISTRIBUTE":
         teammates = [p for p in players if _is_my_team(p, team_id) and _player_idx(p) != my_player_id]
         if teammates:

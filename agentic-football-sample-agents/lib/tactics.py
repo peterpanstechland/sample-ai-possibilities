@@ -82,13 +82,24 @@ def _lane_blocked(me_pos, opp_goal_x, opponents, lane_radius=None) -> tuple[bool
     return True, 0.0
 
 
-def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x) -> tuple[str, bool, float]:
+def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x,
+               position_label=None) -> tuple[str, bool, float]:
     """Shot probability + lane check. Also returns (blocked, y_offset) so the
     caller can add a follow-up TACTICS line telling the agent to shift laterally
     before shooting (rather than blindly firing into a defender's shins).
+
+    GK/DEF are exempt from the range gate: their full-power kick doubles as a
+    clearance, so holding the ball deep is always "blast it at the frame now" —
+    never "carry it into range" (which is how deep possession got swarmed).
     """
     goal = {"x": opp_goal_x, "y": 0}
     d_goal = _dist(me_pos, goal)
+
+    if position_label in ("GK", "DEF"):
+        aim, _y, _perp = _best_shot_aim(me_pos, opp_goal_x, opponents)
+        return (f"- Shot: BLAST (dist {d_goal:.0f}) -> SHOOT NOW aim {aim} "
+                f"power 1.0 — no range limit for you: worst case it's a "
+                f"60-unit clearance, best case it's a goal", False, 0.0)
 
     angle_factor = min(1.0, math.atan2(GOAL_HALF_WIDTH, max(d_goal, 0.1)) / 0.15)
     distance_factor = max(0.0, 1.0 - d_goal / 55.0)
@@ -114,7 +125,15 @@ def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x) -> tuple[str, bool, fl
     lane_clear = aim_perp >= lane_radius
 
     if d_goal > 45:
-        verdict = "out of range: sprint toward goal, shoot the moment dist<=45"
+        # Counter-attack special: their keeper joined the push and is off his
+        # line — a 45-52 unit lob at the open frame is a real chance, and it's
+        # the ONLY long shot worth taking (own-half blasts just donate the ball).
+        gk_off_line = (opp_gk_pos is not None
+                       and _dist(opp_gk_pos, goal) >= 12)
+        if d_goal <= 52 and gk_off_line and lane_clear:
+            verdict = f"GK OFF LINE — LONG SHOT NOW: aim {aim} power 1.0"
+        else:
+            verdict = "out of range: do NOT shoot from here — pass forward or carry to dist<=45, then shoot"
         blocked = False
     elif lane_clear:
         # A corner aim through a clear lane is a single-tick shot — never leave
@@ -249,7 +268,8 @@ def tactics_report(game_state: dict, team_id: int, my_player_id: int, position_l
 
     lines = []
     if i_have_ball:
-        shot, _blocked, _y_off = _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x)
+        shot, _blocked, _y_off = _shot_line(me_pos, opp_gk_pos, opponents,
+                                            opp_goal_x, position_label)
         lines.append(shot)
         pass_line = _pass_line(me_pos, my_player_id, my_team, opponents)
         if pass_line:

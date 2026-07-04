@@ -37,7 +37,7 @@ def test_fallback():
 
 
 def test_fallback_with_ball():
-    """Test fallback when DEF has the ball — should PASS to nearest non-GK teammate."""
+    """Blast rule: DEF possession = unconditional full-power SHOOT (no range gate)."""
     print(f"=== FALLBACK WITH BALL ({POSITION_LABEL}) ===")
     state = json.loads(json.dumps(GAME_STATE))
     state["ball"]["possessionAgentId"] = f"agentId_{MY_PLAYER_ID}"
@@ -45,10 +45,9 @@ def test_fallback_with_ball():
     cmds = fallback_commands(state, TEAM_ID, MY_PLAYER_ID)
     for c in cmds:
         print(f"  P{c['playerId']}: {c['commandType']} {c.get('parameters', {})}")
-    assert cmds[0]["commandType"] == "PASS", f"FAIL: expected PASS, got {cmds[0]['commandType']}"
-    target = cmds[0]["parameters"]["target_player_id"]
-    assert target != 0, "FAIL: DEF should not pass to GK"
-    print(f"  Correctly passes to player {target}")
+    assert cmds[0]["commandType"] == "SHOOT", f"FAIL: expected SHOOT, got {cmds[0]['commandType']}"
+    assert cmds[0]["parameters"]["power"] == 1.0, "FAIL: blast must be full power"
+    print("  Correctly blasts at goal (clearance + shot in one)")
     print()
 
 

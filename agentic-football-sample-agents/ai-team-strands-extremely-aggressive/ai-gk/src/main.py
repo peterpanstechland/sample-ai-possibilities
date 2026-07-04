@@ -10,6 +10,7 @@ from dataclasses import replace
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from agent_base import create_agent, create_invoke_handler
 from fallback import build_fallback, GK_CONFIG
+from overrides import OverrideConfig
 
 app = BedrockAgentCoreApp()
 
@@ -21,14 +22,16 @@ POSITION_LABEL = "GK"
 
 SYSTEM_PROMPT = f"""Ultra-aggressive sweeper-keeper AI. You control ONLY player {MY_PLAYER_ID} (GK) in 5v5 soccer. Each tick: read state, reply ONE command.
 
-RULE #1 — YOU CAN SHOOT TOO. If hasBall=True AND distOppGoal<=45 (rare but happens — GK pushed up), read TACTICS "Shot" line:
-- "LANE CLEAR (X)": SHOOT aim X power 1.0.
-- "POINT-BLANK": SHOOT aim CENTER power 1.0.
-Otherwise distribute the ball forward.
+RULE #1 — BALL IN YOUR HANDS = SHOOT, ALWAYS. hasBall=True in open play means
+SHOOT power 1.0 at the aim in the TACTICS Shot line — NO distance limit. Your
+blast is clearance + counter-attack in one kick: worst case it lands 60 units
+upfield, best case their keeper is off his line and it goes in. Do NOT
+GK_DISTRIBUTE in open play. Only exception: set-piece restarts (GOAL_KICK) —
+then GK_DISTRIBUTE method KICK to player 3 or 4.
 
 TACTICS (priority order):
-1. hasBall=True near own goal (distOppGoal>45): GK_DISTRIBUTE method KICK to player 3 or 4 (use TACTICS Best passes if shown). Never throw sideways.
-2. hasBall=True in opponent half (rare, distOppGoal<=45): obey the TACTICS Shot line — SHOOT if LANE CLEAR, PASS THROUGH otherwise.
+1. hasBall=True in open play: SHOOT aim from TACTICS Shot line, power 1.0.
+2. PlayMode GOAL_KICK (restart): GK_DISTRIBUTE method KICK to player 3 or 4 (use TACTICS Best passes if shown). Never throw sideways.
 3. Opponent has ball in our defensive third AND ASSIGNMENT says you are the presser (you are closest): PRESS_BALL intensity 1.0 or INTERCEPT — sweep off the line.
 4. Opponent has ball elsewhere: MOVE_TO in front of your goal (x ≈ my_goal_x ± 8, y = ball's y clamped to [-8,8]) — cover the shot angle, do NOT chase.
 5. Free ball in our third AND ASSIGNMENT says you are closest: MOVE_TO the ball, sprint true — smother it before an opponent gets there.
@@ -46,7 +49,9 @@ Reply ONLY the JSON array, no other text:
 
 # --- Fallback ---
 # GK stays home more: press only if designated (rare — GK usually not closest),
-# no off-ball marking (guarding the goal takes priority).
+# no off-ball marking (guarding the goal takes priority). Possession stays
+# GK_DISTRIBUTE here because the fallback can't see playMode — the override
+# below turns open-play possession into the blast, set pieces keep KICK.
 AGG_GK_CONFIG = replace(
     GK_CONFIG,
     press_only_if_designated=True,
@@ -55,6 +60,12 @@ AGG_GK_CONFIG = replace(
 )
 fallback_commands = build_fallback(AGG_GK_CONFIG)
 
+# Blast rule (user directive): GK possession in open play is ALWAYS an
+# instant full-power shot at the clearest frame target — no range limit.
+# All other overrides skip the GK (it guards its box, never gets pulled
+# into marking/anchor duties).
+OVERRIDE_CONFIG = OverrideConfig(always_blast=True)
+
 
 # --- Wire it up ---
 
@@ -62,6 +73,7 @@ agent = create_agent(SYSTEM_PROMPT, model_id="us.amazon.nova-micro-v1:0")
 create_invoke_handler(
     app, agent, MY_PLAYER_ID, POSITION_LABEL, fallback_commands,
     fallback_cfg=AGG_GK_CONFIG,
+    override_cfg=OVERRIDE_CONFIG,
 )
 
 if __name__ == "__main__":

@@ -266,6 +266,91 @@ assert tag is None
 out, tag = apply_overrides(_mk("MOVE_TO", target_x=30, target_y=0), gs2, 0, 3, "FWD1", None)
 assert tag is None and out[0]["commandType"] == "MOVE_TO"
 
+# --- Scenario K: iter-9 counter-attack + GK/DEF blast rule ---
+BLAST = OverrideConfig(always_blast=True)
+
+def _mk_for(pid, ctype, **params):
+    return [{"commandType": ctype, "playerId": pid, "teamId": 0, "parameters": params}]
+
+# K1: DEF holds deep in our half (dist ~90 to goal) and tries to PASS -> the
+# blast rule turns ANY open-play possession into a full-power shot (user rule:
+# GK/DEF have no range limit — clearance and shot in one kick).
+gsK1 = copy.deepcopy(GAME_STATE)
+gsK1["ball"]["possessionAgentId"] = "agentId_1"
+gsK1["ball"]["position"] = {"x": -35.0, "y": 5.0, "z": 0}
+for p in gsK1["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_1":
+        p["position"] = {"x": -35, "y": 5}
+out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=3, type="GROUND"),
+                           gsK1, 0, 1, "DEF", BLAST)
+assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert out[0]["parameters"]["power"] == 1.0, out
+# DEF TACTICS line agrees: BLAST verdict, no range gate
+repK1 = tactics_report(gsK1, 0, 1, "DEF")
+assert "BLAST" in repK1 and "SHOOT NOW" in repK1, repK1
+
+# K2: GK blast — open play possession becomes a shot; GOAL_KICK restart keeps
+# GK_DISTRIBUTE mechanics (set pieces exempt).
+gsK2 = copy.deepcopy(GAME_STATE)
+gsK2["ball"]["possessionAgentId"] = "agentId_0"
+gsK2["ball"]["position"] = {"x": -50.0, "y": 0.0, "z": 0}
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsK2, 0, 0, "GK", BLAST)
+assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+gsK2["playMode"] = "GOAL_KICK"
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsK2, 0, 0, "GK", BLAST)
+assert tag is None and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
+
+# K3: long shot enforcement — holder at dist 48 (45-52 window), opponent GK
+# way off his line (22 from goal), lane clear -> forced full-power shot.
+gsK3 = copy.deepcopy(GAME_STATE)
+gsK3["ball"]["possessionAgentId"] = "agentId_3"
+gsK3["ball"]["position"] = {"x": 7.0, "y": 0.0, "z": 0}
+posK3 = {"agentId_0": (35, 10), "agentId_1": (-20, 10), "agentId_2": (30, 20),
+         "agentId_3": (20, -15), "agentId_4": (40, -18)}
+for p in gsK3["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
+        p["position"] = {"x": 7, "y": 0}
+    elif p["teamCode"] == "away":
+        x, y = posK3[p["agentId"]]
+        p["position"] = {"x": x, "y": y}
+out, tag = apply_overrides(_mk_for(3, "MOVE_TO", target_x=20, target_y=0, sprint=True),
+                           gsK3, 0, 3, "FWD1", OverrideConfig())
+assert tag == "longshot" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert out[0]["parameters"]["power"] == 1.0, out
+
+# K4: counter-attack outlet — 4 opponents committed into OUR half, MID holds
+# deep (dist 85) and panic-blasts -> rewritten to ONE fast THROUGH pass to the
+# most advanced forward with a clear lane (home P4).
+gsK4 = copy.deepcopy(GAME_STATE)
+gsK4["ball"]["possessionAgentId"] = "agentId_2"
+gsK4["ball"]["position"] = {"x": -30.0, "y": 0.0, "z": 0}
+posK4_home = {"agentId_0": (-50, 0), "agentId_1": (-40, -5), "agentId_2": (-30, 0),
+              "agentId_3": (5, -10), "agentId_4": (10, 10)}
+posK4_away = {"agentId_0": (50, 0), "agentId_1": (-20, 10), "agentId_2": (-25, 15),
+              "agentId_3": (-5, 15), "agentId_4": (-15, -20)}
+for p in gsK4["players"]:
+    x, y = (posK4_home if p["teamCode"] == "home" else posK4_away)[p["agentId"]]
+    p["position"] = {"x": x, "y": y}
+# high-press detection feeds the state summary…
+assert "OPP HIGH PRESS" in summarize_state(gsK4, 0, 2, "MID")
+# …and the override turns the panic blast into the outlet pass
+out, tag = apply_overrides(_mk_for(2, "SHOOT", aim_location="CENTER", power=1.0),
+                           gsK4, 0, 2, "MID", OverrideConfig())
+assert tag == "counter" and out[0]["commandType"] == "PASS", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == 4, out
+assert out[0]["parameters"]["type"] == "THROUGH", out
+
+# K5: phantom shot — no possession (opp holds in gs) but the LLM answers SHOOT.
+# Non-designated P4 gets a real defensive job; designated P3 presses instead.
+out, tag = apply_overrides(_mk_for(4, "SHOOT", aim_location="CENTER", power=1.0),
+                           gs, 0, 4, "FWD2", OV)
+assert tag == "phantom" and out[0]["commandType"] in ("MARK", "MOVE_TO"), (tag, out)
+out, tag = apply_overrides(_mk_for(3, "SHOOT", aim_location="CENTER", power=1.0),
+                           gs, 0, 3, "FWD1", OV)
+assert tag == "phantom" and out[0]["commandType"] == "PRESS_BALL", (tag, out)
+
 print("Scenario A (away P3 holds): home view OPP / away view MY — OK")
 print("Scenario B (home P3 holds): hasBall=True + SHOOT NOW CENTER 1.0 — OK")
 print("Scenario C (opp GK holds): our GK hasBall=False — OK")
@@ -276,4 +361,5 @@ print("Scenario G (command guardrails clamp bad params) — OK")
 print("Scenario H (LANE CLEAR / BLOCKED shot check with sidestep hint) — OK")
 print("Scenario I (point-blank always shoots even with slight overlap) — OK")
 print("Scenario J (tactical overrides: forced shot / no-chase / anchor / support) — OK")
+print("Scenario K (GK/DEF blast, long shot, counter outlet, phantom fix) — OK")
 print("ALL LIB TESTS PASSED")

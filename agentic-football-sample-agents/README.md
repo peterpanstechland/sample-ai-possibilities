@@ -397,6 +397,33 @@ LLM 输出解析完成后，代码按游戏状态**强制改写**违反战术的
 - GK（player 0）豁免；只有传了 `OverrideConfig` 的球队启用（当前仅 extremely-aggressive），其他队伍行为不变；
 - 每次改写都会写进 DECISION 日志的 `ov` 字段：`analyze_match.py` 输出 overrides 统计，前端 agent 卡片显示「代码纠偏」计数（悬停看明细）——下一场就能量化 LLM 与战术的偏差。
 
+## 防守反击 + GK/DEF 无限制射门（iter-9）
+
+对进攻型 bot 连败后拉了 4 小时 CloudWatch 日志分析（`_loss_analysis.py`），输球模式非常清晰：
+
+- **控球困死本方半场**：拿球时距对方球门中位数 55–58，4 小时里进入射程（≤45）的 tick 只有 4 个——赢下球权却运不出来；
+- **恐慌远射**：150 次射门里 112 次（75%）在 45 以外，等于白送球权；
+- **幻影射门**：LLM 在没持球的 tick 也输出 SHOOT/PASS，浪费防守回合；
+- **GK 高频扑救**：持续被压着打。
+
+iter-9 的回答是把「对方压上 → 我们打身后」变成代码级流程：
+
+| 规则 | 触发条件 | 改写结果 |
+|------|----------|----------|
+| `blast` | **GK/DEF 持球（开放局面）** | 无论 LLM 说什么，强制 `SHOOT power 1.0` 瞄最开的角——**没有距离限制**：最差是 60 单位的解围，最好直接进球（用户规则：门将后卫拿球直接大力射门）。定位球（GOAL_KICK 等）保留原有开球机制 |
+| `longshot` | 持球距门 45–52、**对方 GK 离门 ≥12**、通道干净 | 强制吊射空门 `SHOOT power 1.0`——对方门将压上时唯一值得打的远射 |
+| `counter` | 对方 ≥3 人压进我方半场时深位持球乱带，或射程外恐慌开炮 | 改成 **ONE fast `PASS type THROUGH`** 给最靠前、传球线路干净的前锋；找不到出球点则沿边路带出 |
+| `phantom` | 没持球却输出 SHOOT/PASS | 指定逼抢人改 `PRESS_BALL`，其他人改盯人/回收防线 |
+
+配套改动：
+
+- `state.py` 新增 `count_opponents_in_our_half()`——对方 ≥3 人过半场时状态里注入 **`OPP HIGH PRESS` 行**，提示全队进入防守反击模式（防线收紧、赢球后一脚直塞、前锋保持高位当反击出球点）；
+- `tactics.py` Shot 行按位置分流：**GK/DEF 持球永远是 `BLAST — SHOOT NOW`**（无射程门槛）；MID/FWD 在 45–52 且对方 GK 离门时给 `GK OFF LINE — LONG SHOT NOW`，其余远距离明确「不要开炮，先推进到 45 内」；
+- 提示词同步：GK/DEF 的 RULE #1 变成「拿球=射门」，MID 是反击出球点（一脚直塞 3/4 号），FWD 在 OPP HIGH PRESS 时**不回撤**、钉在边路高位等直塞；
+- 防守反击时锚点整体下沉（DEF/MID 更靠门），但前锋锚点**抬高**——反击需要有人在前面；
+- fallback 同步：DEF `possession_action="SHOOT"`（无条件全力射）；
+- 回归测试 Scenario K 覆盖 blast/长射/反击直塞/幻影射门修正，训练场沿用各 agent 的 `OVERRIDE_CONFIG` 自动生效。
+
 ---
 
 ## 常见问题
