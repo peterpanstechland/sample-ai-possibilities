@@ -70,6 +70,14 @@ def run_query(logs, groups: list[str], minutes: int) -> list[dict]:
     for fields in res.get("results", []):
         row = {f["field"]: f["value"] for f in fields}
         msg = row.get("@message", "")
+        # Runtime log lines are structured JSON; the DECISION payload sits in
+        # the inner .message field (quotes escaped in the raw @message).
+        try:
+            outer = json.loads(msg)
+            if isinstance(outer, dict) and isinstance(outer.get("message"), str):
+                msg = outer["message"]
+        except json.JSONDecodeError:
+            pass
         idx = msg.find("DECISION ")
         if idx == -1:
             continue
