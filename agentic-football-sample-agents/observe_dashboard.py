@@ -26,6 +26,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError
 
 from analyze_match import find_log_groups, run_query, aggregate
 
@@ -34,6 +35,15 @@ TRAINING_DIR = Path(__file__).parent / "training_logs"
 
 _cache = {}
 _cache_lock = threading.Lock()
+
+# STS error codes that mean "credentials are dead", not "query is broken"
+_AUTH_ERROR_CODES = {
+    "ExpiredToken", "ExpiredTokenException", "InvalidClientTokenId",
+    "UnrecognizedClientException", "AccessDeniedException", "AccessDenied",
+}
+_AUTH_HINT = ("AWS 凭证过期/无效（session 失效）。请从 Workshop Studio 重新获取凭证并更新 "
+              "~/.aws/credentials（运行 aws configure 或直接编辑文件），刷新本页即可 — "
+              "服务器每次查询都会重读凭证文件，无需重启。")
 
 
 def _cached(key, fn):
@@ -49,9 +59,21 @@ def _cached(key, fn):
 
 def fetch_cloud(region: str, prefix: str, minutes: int) -> dict:
     def load():
-        logs = boto3.client("logs", region_name=region)
-        groups = find_log_groups(logs, prefix)
-        rows = run_query(logs, groups, minutes) if groups else []
+        # Fresh session per query: unlike the process-wide default session, this
+        # re-reads ~/.aws/credentials every time, so rotating the workshop's
+        # temporary STS credentials never requires a dashboard restart.
+        try:
+            logs = boto3.session.Session().client("logs", region_name=region)
+            groups = find_log_groups(logs, prefix)
+            rows = run_query(logs, groups, minutes) if groups else []
+        except NoCredentialsError:
+            raise RuntimeError(_AUTH_HINT)
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in _AUTH_ERROR_CODES:
+                raise RuntimeError(_AUTH_HINT)
+            raise
+        except BotoCoreError as e:
+            raise RuntimeError(f"AWS 调用失败: {e}")
         return {"label": f"实战 · {len(groups)} 个日志组 · 最近 {minutes} 分钟",
                 "agents": aggregate(rows), "rows": rows[-400:]}
     return _cached(("cloud", region, prefix, minutes), load)
@@ -306,9 +328,15 @@ async function load() {
   const res = await fetch(`/api/data?source=${source}&minutes=${minutes}`);
   const data = await res.json();
   if (data.error) {
-    document.getElementById("meta").textContent = `错误: ${data.error}`;
+    document.getElementById("meta").textContent = "查询出错";
+    const empty = document.getElementById("empty");
+    empty.style.display = "block";
+    empty.style.color = "var(--bad)";
+    empty.textContent = `⚠ ${data.error}`;
+    document.getElementById("cards").innerHTML = "";
     return;
   }
+  document.getElementById("empty").style.color = "";
   if (source === "both") {
     document.getElementById("meta").textContent =
       `${data.cloud.label} ↔ ${data.local.label} · 更新于 ${data.generated_at}`;
