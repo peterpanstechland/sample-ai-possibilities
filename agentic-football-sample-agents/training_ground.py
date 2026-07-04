@@ -36,6 +36,7 @@ from state import summarize_state, possession_context  # noqa: E402
 from parsing import parse_commands  # noqa: E402
 from pattern_tracker import PatternTracker  # noqa: E402
 from tactics import tactics_report  # noqa: E402
+from overrides import apply_overrides  # noqa: E402
 from analyze_match import analyze  # noqa: E402
 
 TEAM_ID = 0  # train as HOME, attacking +x
@@ -172,7 +173,8 @@ def run_position(mod, pid, label, scenarios, use_llm, team_tag):
         if tactics:
             summary = f"{summary}\n\n{tactics}"
 
-        source, cmds, latency_ms = "fallback", None, None
+        source, cmds, latency_ms, ov = "fallback", None, None, None
+        override_cfg = getattr(mod, "OVERRIDE_CONFIG", None)
         if use_llm:
             try:
                 agent.messages = []
@@ -181,7 +183,11 @@ def run_position(mod, pid, label, scenarios, use_llm, team_tag):
                 latency_ms = round((time.time() - t0) * 1000)
                 cmds = parse_commands(response, TEAM_ID, pid)
                 source = "llm"
-                if not cmds:
+                if cmds:
+                    # Same post-LLM tactical enforcement the deployed agents run
+                    cmds, ov = apply_overrides(cmds, gs, TEAM_ID, pid, label,
+                                               override_cfg)
+                else:
                     source = "parse-fallback"
                     cmds = mod.fallback_commands(gs, TEAM_ID, pid)
             except Exception:
@@ -191,7 +197,7 @@ def run_position(mod, pid, label, scenarios, use_llm, team_tag):
             cmds = mod.fallback_commands(gs, TEAM_ID, pid)
 
         hb, dg = possession_context(gs, TEAM_ID, pid)
-        rows.append({
+        row = {
             "pos": label, "tick": gs["tick"], "t": round(gs["gameTime"]),
             "source": source,
             "cmd": cmds[0].get("commandType") if cmds else None,
@@ -199,7 +205,10 @@ def run_position(mod, pid, label, scenarios, use_llm, team_tag):
             "hb": hb, "dg": dg,
             "scenario": scen_name,
             "_log": f"training/{team_tag}", "_ts": int(time.time() * 1000),
-        })
+        }
+        if ov:
+            row["ov"] = ov
+        rows.append(row)
     return rows
 
 

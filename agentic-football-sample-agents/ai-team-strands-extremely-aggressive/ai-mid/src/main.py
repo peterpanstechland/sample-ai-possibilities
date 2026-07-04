@@ -10,6 +10,7 @@ from dataclasses import replace
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from agent_base import create_agent, create_invoke_handler
 from fallback import build_fallback, MID_CONFIG
+from overrides import OverrideConfig
 
 app = BedrockAgentCoreApp()
 
@@ -56,6 +57,10 @@ AGG_MID_CONFIG = replace(
 )
 fallback_commands = build_fallback(AGG_MID_CONFIG)
 
+# Hard tactical rules enforced in code: always shoot a clear lane, never
+# chase when not designated, hold the compact midfield line when defending.
+OVERRIDE_CONFIG = OverrideConfig()
+
 
 # --- Wire it up ---
 
@@ -63,6 +68,7 @@ agent = create_agent(SYSTEM_PROMPT, model_id="us.amazon.nova-micro-v1:0")
 create_invoke_handler(
     app, agent, MY_PLAYER_ID, POSITION_LABEL, fallback_commands,
     fallback_cfg=AGG_MID_CONFIG,
+    override_cfg=OVERRIDE_CONFIG,
 )
 
 if __name__ == "__main__":

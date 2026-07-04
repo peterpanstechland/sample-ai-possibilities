@@ -377,6 +377,26 @@ Agent 每个 tick 会向 CloudWatch Logs 写一条结构化 `DECISION` 日志（
 `MOVE_TO` 目标是「opp_goal_x*0.75, y=±14」的边路空当，而不是正中的后卫堆。
 另有明确规则「Do NOT run down the center, that is a defender highway」。
 
+## 战术硬约束（Post-LLM Overrides，iter-8）
+
+iter-7 之后的实战数据显示：LLM 应答率 100%（fallback 从不触发），于是所有只写在
+提示词/fallback 里的规则对 Nova Micro 都是「可选项」——一场比赛 370 条指令里
+MOVE_TO 207 条、PRESS 101 条、**MARK 0 条**。iter-8 引入 `lib/overrides.py`：
+LLM 输出解析完成后，代码按游戏状态**强制改写**违反战术的指令（提示词负责引导，代码负责兜底）：
+
+| 规则 | 触发条件 | 改写结果 |
+|------|----------|----------|
+| `shoot` | 持球、距门 ≤45、有清晰射门通道（或 ≤15 贴脸） | 无论 LLM 说什么，强制 `SHOOT aim <最开的角> power 1.0` |
+| `aim`   | LLM 射了被封死的角 | 瞄准点改成计算出的空当角 |
+| `no-chase` | 非指定逼抢人却 PRESS/追球 | 改成 `MARK` 最近的接应对手（排除持球人），或回收紧凑防线 |
+| `anchor` | 防守阶段 MOVE_TO 偏离「随球移动的紧凑防线锚点」>12 | 改成盯人/回锚点——后卫线跟着球横移，不再乱跑 |
+| `support` | 队友持球时输出 PRESS/PASS/SHOOT 等废指令 | 改成插入远门柱/弧顶的支援跑位 |
+| `wing` | 前锋持球出射程还往中路带 | 目标 y 改到边路（±14） |
+
+- 锚点公式随球移动：DEF `x=ball_x−12`（钳在本方 6~45 区间）、MID `x=ball_x−5`、FWD 保持高位但内收 y=±10 —— 防线紧凑性由代码保证；
+- GK（player 0）豁免；只有传了 `OverrideConfig` 的球队启用（当前仅 extremely-aggressive），其他队伍行为不变；
+- 每次改写都会写进 DECISION 日志的 `ov` 字段：`analyze_match.py` 输出 overrides 统计，前端 agent 卡片显示「代码纠偏」计数（悬停看明细）——下一场就能量化 LLM 与战术的偏差。
+
 ---
 
 ## 常见问题

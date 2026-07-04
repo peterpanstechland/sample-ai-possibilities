@@ -11,6 +11,7 @@ from pattern_tracker import PatternTracker
 from state import summarize_state, possession_context
 from tactics import tactics_report
 from fallback import FallbackConfig, build_last_resort
+from overrides import OverrideConfig, apply_overrides
 
 
 def create_agent(
@@ -35,6 +36,7 @@ def create_invoke_handler(
     position_label: str,
     fallback_fn: Callable[[dict, int, int], list[dict]],
     fallback_cfg: FallbackConfig,
+    override_cfg: OverrideConfig | None = None,
 ):
     """Create and register the @app.entrypoint invoke handler.
 
@@ -42,23 +44,29 @@ def create_invoke_handler(
       1. LLM response → parse into commands
       2. fallback_fn(game_state, team_id, my_player_id) → rule-based commands
       3. last-resort command from fallback_cfg → single safe command
+
+    When override_cfg is set, LLM commands additionally pass through
+    apply_overrides — hard tactical rules (shoot when the lane is clear,
+    no chasing when not designated, hold the compact defensive line) are
+    enforced in code instead of hoped for in the prompt.
     """
     log = app.logger
     last_resort = build_last_resort(fallback_cfg, my_player_id)
     tracker = PatternTracker()
 
     def log_decision(source, commands, latency_ms, game_state, prompt_chars,
-                     effective_pid=my_player_id, team_id=0):
+                     effective_pid=my_player_id, team_id=0, ov=None):
         """One structured line per tick for CloudWatch Logs Insights.
 
         Fields: pos, tick, t (game seconds), source (llm/fallback/error-fallback/
         last-resort), cmd, latency_ms (LLM call only), prompt_chars,
         hb (had ball 0/1), dg (dist to opponent goal) — the last two let the
-        analyzer measure shot discipline on real chances.
+        analyzer measure shot discipline on real chances. ov names the tactical
+        override that rewrote the LLM command this tick (absent when none).
         """
         try:
             hb, dg = possession_context(game_state, team_id, effective_pid)
-            log.info("DECISION " + json.dumps({
+            payload = {
                 "pos": position_label,
                 "tick": game_state.get("tick"),
                 "t": round(game_state.get("gameTime", 0) or 0),
@@ -68,7 +76,10 @@ def create_invoke_handler(
                 "prompt_chars": prompt_chars,
                 "hb": hb,
                 "dg": dg,
-            }, separators=(",", ":")))
+            }
+            if ov:
+                payload["ov"] = ov
+            log.info("DECISION " + json.dumps(payload, separators=(",", ":")))
         except Exception:
             pass
 
@@ -119,10 +130,16 @@ def create_invoke_handler(
             commands = parse_commands(response_text, team_id, effective_pid)
 
             if commands:
+                commands, ov = apply_overrides(
+                    commands, game_state, team_id, effective_pid,
+                    position_label, override_cfg)
+                if ov:
+                    log.info(f"OVERRIDE {ov}: LLM said something else, enforcing "
+                             f"{commands[0].get('commandType')}")
                 log.info(f"LLM returned {len(commands)} commands: "
                          f"{[c.get('commandType') for c in commands]}")
                 log_decision("llm", commands, llm_ms, game_state, len(state_summary),
-                             effective_pid, team_id)
+                             effective_pid, team_id, ov=ov)
                 yield json.dumps(commands)
             else:
                 log.warn(f"LLM parse failed, using fallback. Response: {response_text[:200]}")

@@ -121,6 +121,11 @@ def aggregate(rows: list[dict]) -> list[dict]:
                    if i.get("hb") == 1 and isinstance(i.get("dg"), (int, float)) and i["dg"] <= 45]
         chance_shots = sum(1 for i in chances if i.get("cmd") == "SHOOT")
 
+        # Tactical overrides: ticks where code rewrote the LLM command
+        # (shoot/aim/no-chase/anchor/support/wing). High counts are fine for
+        # winning but flag how far the raw LLM drifts from the game plan.
+        overrides = Counter(i.get("ov") for i in items if i.get("ov"))
+
         recs = []
         llm_ratio = sources.get("llm", 0) / n
         pf = sources.get("parse-fallback", 0)
@@ -166,6 +171,7 @@ def aggregate(rows: list[dict]) -> list[dict]:
             "commands": dict(cmds.most_common()),
             "shots": cmds.get("SHOOT", 0),
             "discipline": {"chances": len(chances), "shots": chance_shots},
+            "overrides": dict(overrides.most_common()),
             "recommendations": recs,
         })
     return agents
@@ -192,6 +198,9 @@ def analyze(rows: list[dict]) -> str:
         if a["discipline"]["chances"]:
             out.append(f"  shot discipline: {a['discipline']['shots']}/{a['discipline']['chances']} "
                        f"(shots taken / ticks holding ball within 45)")
+        if a.get("overrides"):
+            ov_line = ", ".join(f"{k}: {v}" for k, v in a["overrides"].items())
+            out.append(f"  overrides (code enforced over LLM): {ov_line}")
         recs = a["recommendations"]
         out.append("  recommendations:" if recs else "  recommendations: none — healthy")
         for r_ in recs:

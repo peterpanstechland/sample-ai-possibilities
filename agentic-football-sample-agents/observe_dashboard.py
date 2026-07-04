@@ -167,6 +167,9 @@ function agentCard(a) {
     : `<div class="healthy">健康 — 无建议</div>`;
   const disc = a.discipline && a.discipline.chances
     ? `<div class="kpi"><div class="v">${a.discipline.shots}/${a.discipline.chances}</div><div class="l">把握射门</div></div>` : "";
+  const ovTotal = a.overrides ? Object.values(a.overrides).reduce((s,v)=>s+v,0) : 0;
+  const ov = ovTotal
+    ? `<div class="kpi" title="${Object.entries(a.overrides).map(([k,v])=>`${k}:${v}`).join("  ")}"><div class="v">${ovTotal}</div><div class="l">代码纠偏</div></div>` : "";
   return `
     <div class="card">
       <h2><span style="color:${POS_COLORS[a.pos]||"#fff"}">${a.pos}</span><span>${a.shots} 射门</span></h2>
@@ -176,7 +179,7 @@ function agentCard(a) {
         <div class="kpi"><div class="v">${Math.round(100*a.llm_ratio)}%</div><div class="l">LLM 决策</div></div>
         <div class="kpi"><div class="v">${a.latency.p50 ?? "—"}</div><div class="l">p50 ms</div></div>
         <div class="kpi"><div class="v">${a.latency.p95 ?? "—"}</div><div class="l">p95 ms</div></div>
-        ${disc}
+        ${disc}${ov}
       </div>
       <div class="srcbar">${srcbar}</div>
       <div class="cmds">${cmds}</div>

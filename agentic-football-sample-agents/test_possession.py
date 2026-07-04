@@ -15,6 +15,7 @@ from state import summarize_state, get_possession_info, resolve_holder, _is_my_t
 from tactics import tactics_report, _lane_blocked
 from pattern_tracker import PatternTracker
 from parsing import parse_commands
+from overrides import OverrideConfig, apply_overrides
 
 # --- Scenario A: AWAY P3 holds the ball (ball at away P3's position (30,-12)) ---
 gs = copy.deepcopy(GAME_STATE)
@@ -199,6 +200,72 @@ rep10 = tactics_report(gs10, 0, 3, "FWD1")
 assert "POINT-BLANK" in rep10 or "LANE CLEAR" in rep10, rep10
 assert "SHOOT NOW" in rep10, rep10
 
+# --- Scenario J: post-LLM tactical overrides (code enforces the game plan) ---
+OV = OverrideConfig()
+
+def _mk(ctype, **params):
+    return [{"commandType": ctype, "playerId": 3, "teamId": 0, "parameters": params}]
+
+# J1: holder in range dribbles (MOVE_TO) -> forced SHOOT at the clearest aim.
+# gs2: home P3 holds at (14,-5), dist ~41 to goal; opp GK parks CENTER but the
+# TL corner lane is open.
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=30, target_y=0, sprint=True),
+                           gs2, 0, 3, "FWD1", OV)
+assert tag == "shoot" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert out[0]["parameters"]["power"] == 1.0
+assert out[0]["parameters"]["aim_location"] in ("TL", "TR", "BL", "BR", "CENTER")
+
+# J2: holder shoots at a covered corner -> re-aimed at the open one.
+out, tag = apply_overrides(_mk("SHOOT", aim_location="CENTER", power=0.5),
+                           gs2, 0, 3, "FWD1", OV)
+assert tag == "aim" and out[0]["parameters"]["aim_location"] != "CENTER", (tag, out)
+assert out[0]["parameters"]["power"] == 1.0
+
+# J3: opponent holds (gs: away P3 at (30,-12)); home P4 is NOT the designated
+# presser (home P3 is closer) — its PRESS_BALL becomes a MARK on the nearest
+# non-holder opponent (away P2).
+cmds4 = [{"commandType": "PRESS_BALL", "playerId": 4, "teamId": 0,
+          "parameters": {"intensity": 1.0}}]
+out, tag = apply_overrides(cmds4, gs, 0, 4, "FWD2", OV)
+assert tag == "no-chase" and out[0]["commandType"] == "MARK", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == 2, out
+
+# J4: the designated presser (home P3, closest to the carrier) keeps pressing.
+out, tag = apply_overrides(_mk("PRESS_BALL", intensity=1.0), gs, 0, 3, "FWD1", OV)
+assert tag is None and out[0]["commandType"] == "PRESS_BALL", (tag, out)
+
+# J5: defensive phase, MID wanders far from its ball-shifted anchor -> pulled
+# into a real defensive job (MARK the nearest passing option: away P1).
+cmds2 = [{"commandType": "MOVE_TO", "playerId": 2, "teamId": 0,
+          "parameters": {"target_x": 45, "target_y": 20, "sprint": True}}]
+out, tag = apply_overrides(cmds2, gs, 0, 2, "MID", OV)
+assert tag == "anchor", (tag, out)
+assert out[0]["commandType"] == "MARK" and out[0]["parameters"]["target_player_id"] == 1, out
+
+# J6: teammate holds the ball but the agent answers PRESS_BALL -> support run.
+out, tag = apply_overrides([{"commandType": "PRESS_BALL", "playerId": 4, "teamId": 0,
+                             "parameters": {"intensity": 1.0}}], gs2, 0, 4, "FWD2", OV)
+assert tag == "support" and out[0]["commandType"] == "MOVE_TO", (tag, out)
+assert out[0]["parameters"]["target_x"] == 48, out  # far-post spot, not a chase
+
+# J7: carrying out of range down the middle -> steered to the wing lane.
+gs11 = copy.deepcopy(GAME_STATE)
+gs11["ball"]["possessionAgentId"] = "agentId_3"
+gs11["ball"]["position"] = {"x": -20.0, "y": -5.0, "z": 0}
+for p in gs11["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
+        p["position"] = {"x": -20, "y": -5}
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=0, target_y=0, sprint=True),
+                           gs11, 0, 3, "FWD1", OverrideConfig(wing_y=-14.0))
+assert tag == "wing" and out[0]["parameters"]["target_y"] == -14.0, (tag, out)
+
+# J8: GK exempt; None config is a no-op.
+out, tag = apply_overrides([{"commandType": "MOVE_TO", "playerId": 0, "teamId": 0,
+                             "parameters": {"target_x": 0, "target_y": 0}}], gs, 0, 0, "GK", OV)
+assert tag is None
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=30, target_y=0), gs2, 0, 3, "FWD1", None)
+assert tag is None and out[0]["commandType"] == "MOVE_TO"
+
 print("Scenario A (away P3 holds): home view OPP / away view MY — OK")
 print("Scenario B (home P3 holds): hasBall=True + SHOOT NOW CENTER 1.0 — OK")
 print("Scenario C (opp GK holds): our GK hasBall=False — OK")
@@ -208,4 +275,5 @@ print("Scenario F (late-game GAME PLAN by score) — OK")
 print("Scenario G (command guardrails clamp bad params) — OK")
 print("Scenario H (LANE CLEAR / BLOCKED shot check with sidestep hint) — OK")
 print("Scenario I (point-blank always shoots even with slight overlap) — OK")
+print("Scenario J (tactical overrides: forced shot / no-chase / anchor / support) — OK")
 print("ALL LIB TESTS PASSED")
