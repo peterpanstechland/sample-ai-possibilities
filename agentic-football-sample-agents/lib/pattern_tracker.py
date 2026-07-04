@@ -11,7 +11,7 @@ A new match is detected when gameTime jumps backwards; counters reset.
 
 from collections import Counter, deque
 
-from state import _player_idx, _is_my_team, _possession_idx, get_goal_positions
+from state import _player_idx, _is_my_team, _possession_idx, get_goal_positions, resolve_holder
 
 DEF_THIRD_DEPTH = 36.7  # field half-length 55 * 2/3
 
@@ -46,12 +46,9 @@ class PatternTracker:
         ball_pos = ball.get("position", {}) or {}
 
         holder = None
-        possession_idx = _possession_idx(ball)
-        if possession_idx is not None:
-            # Same first-match rule as state.get_possession_info for ambiguous ids
-            p = next((q for q in players if _player_idx(q) == possession_idx), None)
-            if p is not None:
-                holder = (not _is_my_team(p, team_id), possession_idx)
+        p = resolve_holder(ball, players)
+        if p is not None:
+            holder = (not _is_my_team(p, team_id), _player_idx(p))
 
         if holder and holder[0]:
             self.opp_hold[holder[1]] += 1

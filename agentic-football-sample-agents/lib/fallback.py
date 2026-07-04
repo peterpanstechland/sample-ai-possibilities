@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from state import get_goal_positions, get_possession_info, dist, _player_idx, _is_my_team, _possession_idx
+from state import get_goal_positions, get_possession_info, dist, _player_idx, _is_my_team, resolve_holder
 
 
 @dataclass
@@ -32,10 +32,11 @@ class FallbackConfig:
     press_intensity: float = 0.7
     press_duration: int = 3
 
-    # Shoot threshold (distance to opp goal)
-    shoot_threshold: float = 25.0
-    shoot_aim: str = "TR"
-    shoot_power: float = 0.9
+    # Shoot threshold (distance to opp goal) — shoot-first policy:
+    # any look inside 45 is a full-power shot at CENTER, never a dribble
+    shoot_threshold: float = 45.0
+    shoot_aim: str = "CENTER"
+    shoot_power: float = 1.0
 
     # Advance with ball (for forwards)
     advance_x_factor: float = 0.6
@@ -89,7 +90,7 @@ MID_CONFIG = FallbackConfig(
     possession_action="SHOOT_OR_PASS",
     default_x_factor=0.5, default_x_ref="ball_x", default_y="track_ball_30",
     press_distance=20.0, press_intensity=0.6,
-    shoot_threshold=25.0, shoot_aim="TR", shoot_power=0.8,
+    shoot_threshold=45.0, shoot_aim="CENTER", shoot_power=1.0,
     default_stance=0,
     last_resort_command_type="PRESS_BALL", last_resort_params={"intensity": 0.5},
     last_resort_duration=3,
@@ -101,7 +102,6 @@ FWD1_CONFIG = FallbackConfig(
     support_x_factor=0.5, support_y=-10, support_sprint=True,
     default_x_factor=0.4, default_x_ref="opp_goal", default_y=-8,
     press_distance=20.0, press_intensity=0.7,
-    shoot_aim="TR", shoot_power=0.9,
     default_stance=1,
     last_resort_command_type="PRESS_BALL", last_resort_params={"intensity": 0.6},
     last_resort_duration=3,
@@ -113,7 +113,6 @@ FWD2_CONFIG = FallbackConfig(
     support_x_factor=0.5, support_y=10, support_sprint=True,
     default_x_factor=0.4, default_x_ref="opp_goal", default_y=8,
     press_distance=20.0, press_intensity=0.7,
-    shoot_aim="BL", shoot_power=0.9,
     default_stance=1,
     last_resort_command_type="PRESS_BALL", last_resort_params={"intensity": 0.6},
     last_resort_duration=3,
@@ -144,7 +143,6 @@ def build_fallback(cfg: FallbackConfig) -> Callable[[dict, int, int], list[dict]
         ball = game_state.get("ball", {})
         ball_pos = ball.get("position", {"x": 0, "y": 0})
         players = game_state.get("players", [])
-        possession_id = _possession_idx(ball)
         my_goal_x, opp_goal_x = get_goal_positions(team_id)
 
         me = next(
@@ -156,8 +154,8 @@ def build_fallback(cfg: FallbackConfig) -> Callable[[dict, int, int], list[dict]
 
         pos = me.get("position", {"x": 0, "y": 0})
 
-        # --- We have the ball ---
-        if possession_id == my_player_id:
+        # --- I have the ball (team-aware: opp player with my idx doesn't count) ---
+        if resolve_holder(ball, players) is me:
             return _on_ball(cfg, game_state, players, team_id, my_player_id, pos, my_goal_x, opp_goal_x)
 
         # --- DEF: mark dangerous opponent ---

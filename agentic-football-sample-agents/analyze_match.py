@@ -97,16 +97,14 @@ def percentile(sorted_vals, p):
     return sorted_vals[k]
 
 
-def analyze(rows: list[dict]) -> str:
-    if not rows:
-        return "No DECISION lines found. Deploy the instrumented agents and play a match first."
-
-    out = []
+def aggregate(rows: list[dict]) -> list[dict]:
+    """Group DECISION rows per agent and compute stats + recommendations."""
     by_agent = defaultdict(list)
     for r in rows:
         runtime = r["_log"].replace(LOG_GROUP_PREFIX, "").split("-DEFAULT")[0]
         by_agent[(runtime, r.get("pos", "?"))].append(r)
 
+    agents = []
     for (runtime, pos), items in sorted(by_agent.items()):
         n = len(items)
         sources = Counter(i.get("source") for i in items)
@@ -115,17 +113,6 @@ def analyze(rows: list[dict]) -> str:
                      if i.get("source") == "llm" and isinstance(i.get("latency_ms"), (int, float)))
         chars = [i["prompt_chars"] for i in items if isinstance(i.get("prompt_chars"), (int, float))]
 
-        out.append(f"=== {pos} ({runtime}) — {n} ticks ===")
-        src_line = ", ".join(f"{s}: {c} ({100 * c // n}%)" for s, c in sources.most_common())
-        out.append(f"  sources: {src_line}")
-        if lat:
-            out.append(f"  llm latency ms: p50={percentile(lat, 50)} p95={percentile(lat, 95)} max={lat[-1]}")
-        if chars:
-            out.append(f"  prompt chars: avg={sum(chars) // len(chars)} max={max(chars)}")
-        top_cmds = ", ".join(f"{c}: {k}" for c, k in cmds.most_common(5))
-        out.append(f"  commands: {top_cmds}")
-
-        # Tuning recommendations
         recs = []
         llm_ratio = sources.get("llm", 0) / n
         pf = sources.get("parse-fallback", 0)
@@ -144,10 +131,53 @@ def analyze(rows: list[dict]) -> str:
             recs.append("GK never used GK_DISTRIBUTE — distribution priority may not be firing")
         if pos in ("FWD1", "FWD2", "MID") and cmds.get("SHOOT", 0) == 0 and n > 20:
             recs.append(f"{pos} never shot — check shot-first tactics / TACTICS block injection")
+        if pos in ("FWD1", "FWD2", "MID", "DEF") and n > 20 and cmds.get("MOVE_TO", 0) / n > 0.85:
+            recs.append(f"{pos} is mostly dribbling/running ({cmds.get('MOVE_TO', 0)}/{n} MOVE_TO) — "
+                        f"shoot-first rule may not be firing (check hasBall attribution)")
         if llm_ratio < 0.8:
             recs.append(f"only {round(100 * llm_ratio)}% decisions from LLM — the team is "
                         f"effectively playing on rule-based fallback")
 
+        agents.append({
+            "pos": pos,
+            "runtime": runtime,
+            "ticks": n,
+            "sources": dict(sources),
+            "llm_ratio": round(llm_ratio, 3),
+            "latency": {
+                "p50": percentile(lat, 50), "p95": percentile(lat, 95),
+                "max": lat[-1] if lat else None,
+            },
+            "prompt_chars": {
+                "avg": sum(chars) // len(chars) if chars else None,
+                "max": max(chars) if chars else None,
+            },
+            "commands": dict(cmds.most_common()),
+            "shots": cmds.get("SHOOT", 0),
+            "recommendations": recs,
+        })
+    return agents
+
+
+def analyze(rows: list[dict]) -> str:
+    if not rows:
+        return "No DECISION lines found. Deploy the instrumented agents and play a match first."
+
+    out = []
+    for a in aggregate(rows):
+        n = a["ticks"]
+        out.append(f"=== {a['pos']} ({a['runtime']}) — {n} ticks ===")
+        src_line = ", ".join(f"{s}: {c} ({100 * c // n}%)"
+                             for s, c in Counter(a["sources"]).most_common())
+        out.append(f"  sources: {src_line}")
+        if a["latency"]["p50"] is not None:
+            out.append(f"  llm latency ms: p50={a['latency']['p50']} "
+                       f"p95={a['latency']['p95']} max={a['latency']['max']}")
+        if a["prompt_chars"]["avg"] is not None:
+            out.append(f"  prompt chars: avg={a['prompt_chars']['avg']} max={a['prompt_chars']['max']}")
+        top_cmds = ", ".join(f"{c}: {k}" for c, k in Counter(a["commands"]).most_common(5))
+        out.append(f"  commands: {top_cmds}")
+        recs = a["recommendations"]
         out.append("  recommendations:" if recs else "  recommendations: none — healthy")
         for r_ in recs:
             out.append(f"    - {r_}")

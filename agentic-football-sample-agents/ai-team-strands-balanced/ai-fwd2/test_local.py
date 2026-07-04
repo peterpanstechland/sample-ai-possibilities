@@ -1,4 +1,4 @@
-"""Local test for the FWD2 agent — tests state summary, parsing, fallback, and LLM."""
+﻿"""Local test for the FWD2 agent — tests state summary, parsing, fallback, and LLM."""
 
 import json
 import sys
@@ -44,12 +44,13 @@ def test_fallback_shoot():
     state = json.loads(json.dumps(GAME_STATE))
     state["ball"]["possessionAgentId"] = f"agentId_{MY_PLAYER_ID}"
     state["players"][4]["position"] = {"x": 40, "y": 8}  # near opp goal
+    state["ball"]["position"] = dict(state["players"][MY_PLAYER_ID]["position"])  # ball at holder's feet
     cmds = fallback_commands(state, TEAM_ID, MY_PLAYER_ID)
     for c in cmds:
         print(f"  P{c['playerId']}: {c['commandType']} {c.get('parameters', {})}")
     assert cmds[0]["commandType"] == "SHOOT", f"FAIL: expected SHOOT, got {cmds[0]['commandType']}"
-    assert cmds[0]["parameters"]["aim_location"] == "BL", "FAIL: FWD2 should aim BL"
-    print(f"  Correctly shoots (aim BL) near goal")
+    assert cmds[0]["parameters"]["aim_location"] == "CENTER", "FAIL: FWD2 should aim CENTER"
+    print(f"  Correctly shoots (aim CENTER) near goal")
     print()
 
 
@@ -59,6 +60,7 @@ def test_fallback_advance():
     state = json.loads(json.dumps(GAME_STATE))
     state["ball"]["possessionAgentId"] = f"agentId_{MY_PLAYER_ID}"
     state["players"][4]["position"] = {"x": 10, "y": 8}  # far from goal
+    state["ball"]["position"] = dict(state["players"][MY_PLAYER_ID]["position"])  # ball at holder's feet
     cmds = fallback_commands(state, TEAM_ID, MY_PLAYER_ID)
     for c in cmds:
         print(f"  P{c['playerId']}: {c['commandType']} {c.get('parameters', {})}")

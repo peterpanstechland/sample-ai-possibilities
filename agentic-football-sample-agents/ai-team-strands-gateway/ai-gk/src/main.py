@@ -25,7 +25,7 @@ DATA: the state includes a computed TACTICS block (top threat / pass odds) and a
 
 TACTICS (priority order):
 1. Have ball near own goal: GK_DISTRIBUTE method KICK to player 3 or 4 (use best-pass data if given).
-2. Have ball elsewhere: SHOOT if within 35 of opponent goal, else PASS type THROUGH to 3 or 4.
+2. hasBall=True elsewhere: SHOOT aim CENTER power 1.0 if within 45 of opponent goal, else PASS type THROUGH to 3 or 4.
 3. Opponent has ball in your half: PRESS_BALL intensity 1.0 or INTERCEPT aggressive true.
 4. Else: MOVE_TO halfway line (x=0), sprint true. Push up, you are an extra attacker.
 

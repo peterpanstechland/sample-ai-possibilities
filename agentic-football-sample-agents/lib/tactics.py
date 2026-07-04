@@ -10,7 +10,7 @@ only makes the final choice instead of computing (or guessing) probabilities.
 
 import math
 
-from state import _player_idx, _is_my_team, _possession_idx, get_goal_positions
+from state import _player_idx, _is_my_team, get_goal_positions, resolve_holder
 
 GOAL_HALF_WIDTH = 5.0
 
@@ -20,7 +20,9 @@ def _dist(a, b) -> float:
 
 
 def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x) -> str:
-    """Port of gateway_tools/evaluate_shot.py."""
+    """Shot probability from evaluate_shot math; recommendation kept simple:
+    whenever in range, SHOOT CENTER at full power (dribbling to the byline
+    loses possession far more often than a hard shot misses)."""
     goal = {"x": opp_goal_x, "y": 0}
     d_goal = _dist(me_pos, goal)
 
@@ -29,9 +31,8 @@ def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x) -> str:
     if opp_gk_pos is not None:
         gk_factor = min(1.0, abs(opp_gk_pos.get("y", 0)) / 8.0) * 0.3
         gk_dist_factor = min(1.0, _dist(opp_gk_pos, goal) / 15.0) * 0.2
-        gk_y = opp_gk_pos.get("y", 0)
     else:
-        gk_factor, gk_dist_factor, gk_y = 0.3, 0.2, 0.0
+        gk_factor, gk_dist_factor = 0.3, 0.2
 
     blocker_penalty = 0.0
     for o in opponents:
@@ -43,17 +44,11 @@ def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x) -> str:
     p = max(0.02, min(0.95, distance_factor * 0.45 + angle_factor * 0.25
                       + gk_factor + gk_dist_factor - blocker_penalty))
 
-    my_y = me_pos.get("y", 0)
-    if gk_y > 1:
-        aim = "BL" if my_y > 0 else "BR"
-    elif gk_y < -1:
-        aim = "TL" if my_y > 0 else "TR"
+    if d_goal <= 45:
+        verdict = "SHOOT NOW: aim CENTER power 1.0"
     else:
-        aim = "TR" if my_y <= 0 else "TL"
-    power = min(1.0, 0.6 + d_goal / 80.0)
-
-    verdict = "SHOOT NOW" if p > 0.25 else "low, prefer pass"
-    return f"- Shot: {round(p * 100)}% from here (dist {d_goal:.0f}), aim {aim} power {power:.1f} -> {verdict}"
+        verdict = "out of range: sprint toward goal, shoot the moment dist<=45"
+    return f"- Shot: {round(p * 100)}% (dist {d_goal:.0f} to goal) -> {verdict}"
 
 
 def _pass_line(me_pos, my_id, teammates, opponents) -> str:
@@ -156,12 +151,9 @@ def tactics_report(game_state: dict, team_id: int, my_player_id: int, position_l
 
     my_goal_x, opp_goal_x = get_goal_positions(team_id)
 
-    holder_idx = _possession_idx(ball)
-    holder = None
-    if holder_idx is not None:
-        holder = next((q for q in players if _player_idx(q) == holder_idx), None)
-    i_have_ball = holder is not None and holder_idx == my_player_id and _is_my_team(holder, team_id)
-    opp_holder_idx = holder_idx if (holder is not None and not _is_my_team(holder, team_id)) else None
+    holder = resolve_holder(ball, players)
+    i_have_ball = holder is me
+    opp_holder_idx = _player_idx(holder) if (holder is not None and not _is_my_team(holder, team_id)) else None
 
     opp_gk = next((o for o in opponents if _player_idx(o) == 0), None)
     opp_gk_pos = (opp_gk or {}).get("position")

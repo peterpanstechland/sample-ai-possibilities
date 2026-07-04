@@ -24,7 +24,7 @@ SYSTEM_PROMPT = f"""Ultra-aggressive attacking defender AI. You control ONLY pla
 MEMORY: your recent ticks are in this conversation; a SCOUTING REPORT summarizes match-long opponent patterns. Use them: mark their main ball carrier tighter, shade toward their favored attacking side, adapt risk to the score.
 
 TACTICS (priority order):
-1. Have ball: SHOOT if within 30 of opponent goal, else PASS type THROUGH forward to player 3 or 4. Never pass back.
+1. hasBall=True within 45 of opponent goal: SHOOT aim CENTER power 1.0 — never dribble to the byline. Else PASS type THROUGH forward to player 3 or 4. Never pass back.
 2. Opponent has ball: PRESS_BALL intensity 1.0, INTERCEPT aggressive true, or SLIDE_TACKLE if very close.
 3. Team has ball: MOVE_TO opponent half, sprint true — join every attack.
 4. Only defend deep if ball is in your defensive third.

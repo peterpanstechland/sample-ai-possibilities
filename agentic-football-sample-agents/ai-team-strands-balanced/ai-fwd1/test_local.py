@@ -23,7 +23,7 @@ def test_summarize():
 
 
 def test_fallback():
-    """FWD1 has the ball at x=14 — far from goal, should MOVE_TO toward goal."""
+    """FWD1 has the ball at x=14 — dist 41 to goal, inside the shoot-first range (45)."""
     print(f"=== FALLBACK ({POSITION_LABEL}, has ball) ===")
     cmds = fallback_commands(GAME_STATE, TEAM_ID, MY_PLAYER_ID)
     for c in cmds:
@@ -33,8 +33,9 @@ def test_fallback():
         print(f"  [{ok}] P{pid} T{tid}: {c['commandType']} {c.get('parameters', {})}")
     assert all(c["playerId"] == MY_PLAYER_ID for c in cmds), "FAIL: wrong playerId"
     assert all(c["teamId"] == TEAM_ID for c in cmds), "FAIL: wrong teamId"
-    assert cmds[0]["commandType"] == "MOVE_TO", f"FAIL: expected MOVE_TO, got {cmds[0]['commandType']}"
-    print(f"  Correctly advances toward goal")
+    assert cmds[0]["commandType"] == "SHOOT", f"FAIL: expected SHOOT, got {cmds[0]['commandType']}"
+    assert cmds[0]["parameters"]["power"] == 1.0, "FAIL: should shoot full power"
+    print(f"  Correctly shoots first (CENTER, power 1.0)")
     print()
 
 
@@ -44,6 +45,7 @@ def test_fallback_shoot():
     state = json.loads(json.dumps(GAME_STATE))
     state["ball"]["possessionAgentId"] = f"agentId_{MY_PLAYER_ID}"
     state["players"][3]["position"] = {"x": 40, "y": -5}  # near opp goal
+    state["ball"]["position"] = dict(state["players"][MY_PLAYER_ID]["position"])  # ball at holder's feet
     cmds = fallback_commands(state, TEAM_ID, MY_PLAYER_ID)
     for c in cmds:
         print(f"  P{c['playerId']}: {c['commandType']} {c.get('parameters', {})}")

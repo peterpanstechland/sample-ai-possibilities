@@ -300,6 +300,28 @@ agentic-football-sample-agents/
 
 ---
 
+## 比赛观测（Observability）
+
+Agent 每个 tick 会向 CloudWatch Logs 写一条结构化 `DECISION` 日志（延迟、指令、决策来源、prompt 大小）。两种查看方式：
+
+### 网页观测台（推荐）
+
+```powershell
+.venv\Scripts\python observe_dashboard.py --prefix agg_    # 打开 http://localhost:8777
+```
+
+本地网页，每 30 秒自动刷新，展示每个 agent 的：决策来源占比（LLM vs fallback）、延迟 p50/p95、**射门次数**、指令分布、调优建议，以及全队延迟散点图。参数：`--prefix`（runtime 名前缀，如 `agg_`）、`--minutes`、`--port`、`--region`。
+
+### 命令行报告
+
+```powershell
+.venv\Scripts\python analyze_match.py --minutes 45 --prefix agg_
+```
+
+打完一场比赛后运行，输出逐 agent 的统计与调优建议（例如「FWD1 一直在带球不射门」）。
+
+---
+
 ## 常见问题
 
 ### `aws` 命令找不到

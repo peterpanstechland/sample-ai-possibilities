@@ -44,25 +44,44 @@ def get_goal_positions(team_id: int) -> tuple[float, float]:
     return 55.0, -55.0
 
 
-def get_possession_info(ball: dict, players: list, team_id: int) -> tuple:
-    """Return (possession_id, ball_status_str, we_have_ball)."""
-    possession_id = _possession_idx(ball)
-    if possession_id is not None:
-        holder = next((p for p in players if _player_idx(p) == possession_id), None)
-        if holder:
-            is_mine = _is_my_team(holder, team_id)
-            side = "MY" if is_mine else "OPP"
-            return possession_id, f"{side} player {possession_id}", is_mine
-        return possession_id, "unknown", False
-    return None, "free", False
-
-
 def dist(pos1: dict, pos2: dict) -> float:
     """Euclidean distance between two position dicts with x,y keys."""
     return math.sqrt(
         (pos1.get("x", 0) - pos2.get("x", 0)) ** 2
         + (pos1.get("y", 0) - pos2.get("y", 0)) ** 2
     )
+
+
+def resolve_holder(ball: dict, players: list):
+    """Return the player dict actually holding the ball, or None.
+
+    Player indices repeat across teams (home P3 and away P3 are both idx 3),
+    so an index-only lookup misattributes possession half the time — agents
+    then think they have the ball when the opponent does (GK distributing
+    without the ball, forwards dribbling instead of shooting). Resolve the
+    ambiguity by proximity: the true holder is the candidate nearest the ball.
+    """
+    idx = _possession_idx(ball)
+    if idx is None:
+        return None
+    candidates = [p for p in players if _player_idx(p) == idx]
+    if not candidates:
+        return None
+    ball_pos = ball.get("position", {}) or {}
+    return min(candidates, key=lambda p: dist(p.get("position", {}) or {}, ball_pos))
+
+
+def get_possession_info(ball: dict, players: list, team_id: int) -> tuple:
+    """Return (possession_id, ball_status_str, we_have_ball)."""
+    possession_id = _possession_idx(ball)
+    if possession_id is not None:
+        holder = resolve_holder(ball, players)
+        if holder is not None:
+            is_mine = _is_my_team(holder, team_id)
+            side = "MY" if is_mine else "OPP"
+            return possession_id, f"{side} player {possession_id}", is_mine
+        return possession_id, "unknown", False
+    return None, "free", False
 
 
 def summarize_state(
@@ -106,7 +125,8 @@ def summarize_state(
         pos = me.get("position", {})
         stam = me.get("stamina", 100)
         dist_ball = dist(pos, ball_pos)
-        has_ball = possession_id == my_player_id
+        holder = resolve_holder(ball, players)
+        has_ball = holder is me  # team-aware: my idx AND my team hold the ball
         extra = f" distOppGoal={abs(pos.get('x', 0) - opp_goal_x):.1f}" if position_label in ("MID", "FWD1", "FWD2") else ""
         lines.append(
             f">>> YOUR PLAYER ({position_label}, id={my_player_id}): "
