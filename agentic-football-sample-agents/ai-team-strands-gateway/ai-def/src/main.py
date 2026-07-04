@@ -1,6 +1,7 @@
 """
 AI Soccer Defender Agent (Gateway) — Controls ONLY player 1 (Defender).
-Uses Strands SDK + AgentCore Gateway MCP tools for tactical analysis.
+Aggressive attacking-defender tactics + precomputed TACTICS block; MCP tools as backup.
+Uses Strands SDK + Amazon Nova Micro (latency-optimized).
 """
 
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib")); sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib"))
@@ -18,37 +19,28 @@ app = BedrockAgentCoreApp()
 MY_PLAYER_ID = 1
 POSITION_LABEL = "DEF"
 
-SYSTEM_PROMPT = f"""You are an AI soccer defender controlling ONLY player {MY_PLAYER_ID} in a 5v5 match.
+SYSTEM_PROMPT = f"""Ultra-aggressive attacking defender AI. You control ONLY player {MY_PLAYER_ID} (DEF) in 5v5 soccer. Each tick: read state, reply exactly ONE command.
 
-You have access to tactical analysis TOOLS via MCP. Use them to make better decisions:
-- Use `get_defensive_assignment` EVERY TICK to identify who to mark and how tightly
-- Use `calculate_pass_options` when you win the ball to find the safest outlet pass
-- Use `find_open_space` to position yourself optimally when the ball is far away
+DATA: the state includes a computed TACTICS block (top threat / shot odds / pass odds) and a SCOUTING REPORT (opponent patterns). Trust them — do NOT call MCP tools unless TACTICS is missing; answer in one turn.
 
-## Your Role — Defender
-- Stay between the ball and your goal to shield the goalkeeper
-- ALWAYS call get_defensive_assignment to know which opponent is most dangerous
-- MARK the recommended opponent with the recommended tightness
-- When you win the ball, call calculate_pass_options then PASS to the best option
-- INTERCEPT loose balls in your defensive third
-- Hold your defensive shape — don't chase into the opponent's half
+TACTICS (priority order):
+1. Have ball: SHOOT if within 30 of opponent goal, else PASS type THROUGH forward to player 3 or 4 (use best-pass data). Never pass back.
+2. Opponent has ball: PRESS_BALL intensity 1.0, INTERCEPT aggressive true, or MARK the top threat from TACTICS.
+3. Team has ball: MOVE_TO opponent half, sprint true — join every attack.
+4. Only defend deep if ball is in your defensive third.
 
-## Available Commands
-ONE-SHOT: MOVE_TO, PASS, SHOOT, SLIDE_TACKLE, GK_DISTRIBUTE
-MAINTAINED: PRESS_BALL, MARK, INTERCEPT, FOLLOW_PLAYER
-TACTICAL: SET_STANCE, CLEAR_OVERRIDE, RESET
+COMMANDS: MOVE_TO(target_x,target_y,sprint) | PASS(target_player_id,type=GROUND|AERIAL|THROUGH) | SHOOT(aim_location=TL|TR|BL|BR|CENTER,power) | PRESS_BALL(intensity) | INTERCEPT(aggressive) | SLIDE_TACKLE(target_player_id,sprint,distance) | MARK(target_player_id,tightness=LOOSE|TIGHT) | SET_STANCE(stance 0-2)
+PASS/SHOOT require having the ball.
 
-## Field: x=-55 to +55, y=-35 to +35. Team 0 (HOME) defends -x.
+FIELD: x -55..55, y -35..35. Team 0 defends x=-55, attacks +x. Team 1 defends x=+55, attacks -x.
 
-## Response
-Return ONLY a JSON array with exactly ONE command for player {MY_PLAYER_ID}.
-Example: [{{"commandType":"MARK","playerId":{MY_PLAYER_ID},"parameters":{{"target_player_id":3,"tightness":"TIGHT"}},"duration":5}}]
-Return ONLY the JSON array, no text before or after."""
+Reply ONLY the JSON array, no other text:
+[{{"commandType":"MOVE_TO","playerId":{MY_PLAYER_ID},"parameters":{{"target_x":30,"target_y":0,"sprint":true}},"duration":0}}]"""
 
 fallback_commands = build_fallback(DEF_CONFIG)
 
 agent, mcp_client = create_gateway_agent(
-    SYSTEM_PROMPT, MY_PLAYER_ID, POSITION_LABEL, model_id="us.amazon.nova-lite-v1:0"
+    SYSTEM_PROMPT, MY_PLAYER_ID, POSITION_LABEL, model_id="us.amazon.nova-micro-v1:0"
 )
 create_gateway_invoke_handler(
     app, agent, mcp_client, MY_PLAYER_ID, POSITION_LABEL, fallback_commands,

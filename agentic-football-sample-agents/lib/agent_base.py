@@ -1,6 +1,7 @@
 """Base agent factory for AI soccer position agents."""
 
 import json
+import time
 from typing import Callable
 from strands import Agent
 from strands.models import BedrockModel
@@ -8,6 +9,7 @@ from strands.models import BedrockModel
 from parsing import parse_commands
 from pattern_tracker import PatternTracker
 from state import summarize_state
+from tactics import tactics_report
 from fallback import FallbackConfig, build_last_resort
 
 
@@ -45,6 +47,25 @@ def create_invoke_handler(
     last_resort = build_last_resort(fallback_cfg, my_player_id)
     tracker = PatternTracker()
 
+    def log_decision(source, commands, latency_ms, game_state, prompt_chars):
+        """One structured line per tick for CloudWatch Logs Insights.
+
+        Fields: pos, tick, t (game seconds), source (llm/fallback/error-fallback/
+        last-resort), cmd, latency_ms (LLM call only), prompt_chars.
+        """
+        try:
+            log.info("DECISION " + json.dumps({
+                "pos": position_label,
+                "tick": game_state.get("tick"),
+                "t": round(game_state.get("gameTime", 0) or 0),
+                "source": source,
+                "cmd": commands[0].get("commandType") if commands else None,
+                "latency_ms": latency_ms,
+                "prompt_chars": prompt_chars,
+            }, separators=(",", ":")))
+        except Exception:
+            pass
+
     @app.entrypoint
     async def invoke(payload, context):
         try:
@@ -70,6 +91,12 @@ def create_invoke_handler(
             if scout:
                 state_summary = f"{state_summary}\n\n{scout}"
 
+            # Inline tactical math (gateway tools without the round trips):
+            # shot probability, best passes, top threat, open space.
+            tactics = tactics_report(game_state, team_id, effective_pid, position_label)
+            if tactics:
+                state_summary = f"{state_summary}\n\n{tactics}"
+
             log.info(f"{position_label} agent invoked for team {team_id}, controlling player {effective_pid}")
 
             # Reset conversation history for memoryless agents: each tick is
@@ -78,7 +105,9 @@ def create_invoke_handler(
             # present) keep their windowed history — that is their feature.
             if getattr(agent, "_session_manager", None) is None:
                 agent.messages = []
+            t0 = time.perf_counter()
             response = agent(state_summary)
+            llm_ms = round((time.perf_counter() - t0) * 1000)
             response_text = str(response)
 
             commands = parse_commands(response_text, team_id, effective_pid)
@@ -86,11 +115,13 @@ def create_invoke_handler(
             if commands:
                 log.info(f"LLM returned {len(commands)} commands: "
                          f"{[c.get('commandType') for c in commands]}")
+                log_decision("llm", commands, llm_ms, game_state, len(state_summary))
                 yield json.dumps(commands)
             else:
                 log.warn(f"LLM parse failed, using fallback. Response: {response_text[:200]}")
                 commands = fallback_fn(game_state, team_id, effective_pid)
                 log.info(f"Fallback returned {len(commands)} commands")
+                log_decision("parse-fallback", commands, llm_ms, game_state, len(state_summary))
                 yield json.dumps(commands)
 
         except Exception as e:
@@ -105,10 +136,13 @@ def create_invoke_handler(
                     team_id,
                     effective_pid,
                 )
+                log_decision("error-fallback", commands, None,
+                             prompt_data.get("gameState", {}), None)
                 yield json.dumps(commands)
             except Exception:
                 cmd = dict(last_resort)
                 cmd["teamId"] = 0  # best guess when payload parsing also failed
+                log_decision("last-resort", [cmd], None, {}, None)
                 yield json.dumps([cmd])
 
     return invoke

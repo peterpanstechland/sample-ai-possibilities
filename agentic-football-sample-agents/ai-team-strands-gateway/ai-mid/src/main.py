@@ -1,6 +1,7 @@
 """
 AI Soccer Midfielder Agent (Gateway) — Controls ONLY player 2 (Midfielder).
-Uses Strands SDK + AgentCore Gateway MCP tools for tactical analysis.
+Aggressive second-striker tactics + precomputed TACTICS block; MCP tools as backup.
+Uses Strands SDK + Amazon Nova Micro (latency-optimized).
 """
 
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib")); sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib"))
@@ -18,38 +19,28 @@ app = BedrockAgentCoreApp()
 MY_PLAYER_ID = 2
 POSITION_LABEL = "MID"
 
-SYSTEM_PROMPT = f"""You are an AI soccer midfielder controlling ONLY player {MY_PLAYER_ID} in a 5v5 match.
+SYSTEM_PROMPT = f"""Ultra-aggressive attacking midfielder AI (second striker). You control ONLY player {MY_PLAYER_ID} (MID) in 5v5 soccer. Each tick: read state, reply exactly ONE command.
 
-You have access to tactical analysis TOOLS via MCP. Use them to make better decisions:
-- Use `calculate_pass_options` when you have the ball to find the best pass target
-- Use `find_open_space` when you don't have the ball to position yourself for a pass
-- Use `evaluate_shot` when within shooting range to decide shoot vs pass
-- Use `get_defensive_assignment` when tracking back to know who to pressure
+DATA: the state includes a computed TACTICS block (shot odds / best passes / open space) and a SCOUTING REPORT (opponent patterns). Trust them — do NOT call MCP tools unless TACTICS is missing; answer in one turn.
 
-## Your Role — Midfielder
-- You are the link between defense and attack — distribute the ball wisely
-- When you have the ball, ALWAYS call calculate_pass_options first
-- If within ~25 units of goal, call evaluate_shot to decide shoot vs pass
-- When a teammate has the ball, call find_open_space to get into position
-- When tracking back, call get_defensive_assignment to know who to pressure
-- Balance attack and defense — manage stamina carefully
+TACTICS (priority order):
+1. Have ball: SHOOT if within 35 of opponent goal or TACTICS says SHOOT NOW (power 1.0), else best PASS from TACTICS (prefer THROUGH to 3 or 4). Never pass back.
+2. Opponent has ball: PRESS_BALL intensity 1.0 or INTERCEPT aggressive true — press high.
+3. Else: MOVE_TO the open-space point from TACTICS (or advanced position near forwards), sprint true.
+4. Never track back unless ball is in your own half. Goal scorer first, defender never.
 
-## Available Commands
-ONE-SHOT: MOVE_TO, PASS, SHOOT, SLIDE_TACKLE, GK_DISTRIBUTE
-MAINTAINED: PRESS_BALL, MARK, INTERCEPT, FOLLOW_PLAYER
-TACTICAL: SET_STANCE, CLEAR_OVERRIDE, RESET
+COMMANDS: MOVE_TO(target_x,target_y,sprint) | PASS(target_player_id,type=GROUND|AERIAL|THROUGH) | SHOOT(aim_location=TL|TR|BL|BR|CENTER,power) | PRESS_BALL(intensity) | INTERCEPT(aggressive) | SLIDE_TACKLE(target_player_id,sprint,distance) | SET_STANCE(stance 0-2)
+PASS/SHOOT require having the ball.
 
-## Field: x=-55 to +55, y=-35 to +35. Team 0 (HOME) defends -x.
+FIELD: x -55..55, y -35..35. Team 0 defends x=-55, attacks +x. Team 1 defends x=+55, attacks -x.
 
-## Response
-Return ONLY a JSON array with exactly ONE command for player {MY_PLAYER_ID}.
-Example: [{{"commandType":"PASS","playerId":{MY_PLAYER_ID},"parameters":{{"target_player_id":3,"type":"THROUGH"}},"duration":0}}]
-Return ONLY the JSON array, no text before or after."""
+Reply ONLY the JSON array, no other text:
+[{{"commandType":"SHOOT","playerId":{MY_PLAYER_ID},"parameters":{{"aim_location":"TR","power":1.0}},"duration":0}}]"""
 
 fallback_commands = build_fallback(MID_CONFIG)
 
 agent, mcp_client = create_gateway_agent(
-    SYSTEM_PROMPT, MY_PLAYER_ID, POSITION_LABEL, model_id="us.amazon.nova-pro-v1:0"
+    SYSTEM_PROMPT, MY_PLAYER_ID, POSITION_LABEL, model_id="us.amazon.nova-micro-v1:0"
 )
 create_gateway_invoke_handler(
     app, agent, mcp_client, MY_PLAYER_ID, POSITION_LABEL, fallback_commands,

@@ -34,11 +34,16 @@ def create_gateway_agent(
     player_id: int,
     position_label: str,
     model_id: str = "us.amazon.nova-micro-v1:0",
+    temperature: float = 0.2,
+    max_tokens: int = 300,
 ) -> tuple[Agent, MCPClient]:
     """Create a Strands Agent with MCP tools from AgentCore Gateway.
 
     Tools are fetched inside the MCPClient context so the connection is
     active when list_tools_sync() is called.
+
+    max_tokens is slightly above the plain teams' cap so a toolUse block with
+    coordinate arrays still fits when the agent does decide to call a tool.
 
     Required env vars:
       GATEWAY_URL          — AgentCore Gateway MCP endpoint
@@ -49,7 +54,7 @@ def create_gateway_agent(
       when invoking the agent so tools remain available.
     """
     mcp_client = MCPClient(_create_gateway_transport)
-    model = BedrockModel(model_id=model_id)
+    model = BedrockModel(model_id=model_id, temperature=temperature, max_tokens=max_tokens)
 
     # Fetch tool definitions inside the context so the connection is active.
     with mcp_client:
@@ -59,6 +64,7 @@ def create_gateway_agent(
         model=model,
         system_prompt=system_prompt,
         tools=tools,
+        callback_handler=None,
     )
 
     return agent, mcp_client

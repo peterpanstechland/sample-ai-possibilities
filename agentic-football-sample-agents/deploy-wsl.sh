@@ -41,6 +41,9 @@ if [ "$1" = "aggressive" ] || [ "$1" = "agg" ]; then
 elif [ "$1" = "memory" ] || [ "$1" = "mem" ]; then
   TEAM_DIR="ai-team-strands-memory"
   shift
+elif [ "$1" = "gateway" ] || [ "$1" = "gw" ]; then
+  TEAM_DIR="ai-team-strands-gateway"
+  shift
 elif [ "$1" = "balanced" ] || [ "$1" = "bal" ]; then
   TEAM_DIR="ai-team-strands-balanced"
   shift

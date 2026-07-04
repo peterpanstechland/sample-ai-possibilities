@@ -54,7 +54,7 @@ for cmd in agentcore aws; do
   echo "  $cmd: OK"
 done
 
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null) || {
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null | tr -d ' \r\n') || {
   echo "ERROR: No valid AWS credentials."; exit 1
 }
 export AWS_ACCOUNT_ID
@@ -246,6 +246,9 @@ for agent in "${AGENTS[@]}"; do
     -e "s|\${AWS_ACCOUNT_ID}|$AWS_ACCOUNT_ID|g" \
     -e "s|\${AWS_DEFAULT_REGION}|$AWS_DEFAULT_REGION|g" \
     "$AGENT_SRC/.bedrock_agentcore.yaml.template" > "$STAGE/.bedrock_agentcore.yaml"
+  # uv cross-compile omits console scripts (opentelemetry-instrument) from bin/;
+  # disable observability so the runtime entrypoint does not require OTEL executables.
+  sed -i 's/^\([[:space:]]*enabled:[[:space:]]*\)true/\1false/' "$STAGE/.bedrock_agentcore.yaml"
 
   echo "  Deploying from: $STAGE"
   # Force uv to use the real Python interpreter (not .venv symlink)
