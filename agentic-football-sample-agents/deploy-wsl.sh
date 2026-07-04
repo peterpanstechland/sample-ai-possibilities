@@ -21,8 +21,16 @@ if [ ! -x "$HOME/.local/bin/uv" ] && ! command -v uv >/dev/null 2>&1; then
 fi
 # Linux uv must come before any Windows uv.exe on PATH (Windows uv cannot read /mnt/c paths)
 export PATH="$HOME/.local/bin:$TOOLS_BIN:$ROOT/.venv-linux/bin:$PATH"
-export AWS_CONFIG_FILE=/mnt/c/Users/peter/.aws/config
-export AWS_SHARED_CREDENTIALS_FILE=/mnt/c/Users/peter/.aws/credentials
+# Prefer WSL-native ~/.aws (freshest, written directly); fall back to the
+# Windows profile files. Workshop STS tokens rotate every few hours, and the
+# two locations can drift out of sync — pick whichever exists in WSL first.
+if [ -f "$HOME/.aws/credentials" ]; then
+  export AWS_CONFIG_FILE="$HOME/.aws/config"
+  export AWS_SHARED_CREDENTIALS_FILE="$HOME/.aws/credentials"
+else
+  export AWS_CONFIG_FILE=/mnt/c/Users/peter/.aws/config
+  export AWS_SHARED_CREDENTIALS_FILE=/mnt/c/Users/peter/.aws/credentials
+fi
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 export AGENTCORE_SUPPRESS_RECOMMENDATION=1
 
