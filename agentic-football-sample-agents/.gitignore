@@ -1,0 +1,13 @@
+# Autopilot artifacts
+.portal-profile/
+autopilot-logs/
+autopilot_history.jsonl
+
+# Local deploy logs and toolchains
+deploy-*.log
+.tools/
+.venv-linux/
+**/_build/
+
+# Local match recordings
+training-runs/

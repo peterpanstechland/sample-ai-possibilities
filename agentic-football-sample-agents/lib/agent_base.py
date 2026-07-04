@@ -12,6 +12,7 @@ from state import summarize_state, possession_context
 from tactics import tactics_report
 from fallback import FallbackConfig, build_last_resort
 from overrides import OverrideConfig, apply_overrides
+from tuning import apply_tuning
 
 
 def create_agent(
@@ -53,6 +54,13 @@ def create_invoke_handler(
     log = app.logger
     last_resort = build_last_resort(fallback_cfg, my_player_id)
     tracker = PatternTracker()
+
+    # Autopilot control surface: lib/tuning.json (shipped with each deploy)
+    # overlays tuned parameters onto the hard-coded config. No file = no-op.
+    tuned = apply_tuning(override_cfg, position_label)
+    if tuned is not override_cfg:
+        log.info(f"TUNING applied for {position_label}: {tuned}")
+    override_cfg = tuned
 
     def log_decision(source, commands, latency_ms, game_state, prompt_chars,
                      effective_pid=my_player_id, team_id=0, ov=None):

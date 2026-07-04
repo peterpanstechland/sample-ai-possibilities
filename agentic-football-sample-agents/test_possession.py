@@ -351,6 +351,26 @@ out, tag = apply_overrides(_mk_for(3, "SHOOT", aim_location="CENTER", power=1.0)
                            gs, 0, 3, "FWD1", OV)
 assert tag == "phantom" and out[0]["commandType"] == "PRESS_BALL", (tag, out)
 
+# --- Scenario L: tuning overlay (autopilot control surface) -----------------
+from tuning import apply_tuning, clamp, get as tuning_get
+
+base_cfg = OverrideConfig()
+# global + position overlay, position wins; out-of-bounds values are clamped
+tunedL = apply_tuning(base_cfg, "MID", {
+    "global": {"shoot_threshold": 47.0, "press_bodies": 2},
+    "MID": {"shoot_threshold": 99.0},          # above BOUNDS max -> clamped to 50
+})
+assert tunedL.shoot_threshold == 50.0, tunedL.shoot_threshold
+assert tunedL.press_bodies == 2 and isinstance(tunedL.press_bodies, int), tunedL
+assert base_cfg.shoot_threshold == 45.0, "original config must not mutate"
+# unknown keys are ignored; empty tuning returns the same object; None passes
+tunedL2 = apply_tuning(base_cfg, "GK", {"global": {"not_a_field": 1}})
+assert tunedL2.shoot_threshold == base_cfg.shoot_threshold
+assert apply_tuning(base_cfg, "DEF", {}) is base_cfg
+assert apply_tuning(None, "DEF", {"global": {"press_bodies": 2}}) is None
+assert clamp("press_bodies", 10) == 4 and clamp("gk_out_dist", 1.0) == 8.0
+assert tuning_get("longshot_max", 52.0, {"global": {"longshot_max": 100}}) == 58.0
+
 print("Scenario A (away P3 holds): home view OPP / away view MY — OK")
 print("Scenario B (home P3 holds): hasBall=True + SHOOT NOW CENTER 1.0 — OK")
 print("Scenario C (opp GK holds): our GK hasBall=False — OK")
@@ -362,4 +382,5 @@ print("Scenario H (LANE CLEAR / BLOCKED shot check with sidestep hint) — OK")
 print("Scenario I (point-blank always shoots even with slight overlap) — OK")
 print("Scenario J (tactical overrides: forced shot / no-chase / anchor / support) — OK")
 print("Scenario K (GK/DEF blast, long shot, counter outlet, phantom fix) — OK")
+print("Scenario L (tuning.json overlay: merge, clamp, immutability) — OK")
 print("ALL LIB TESTS PASSED")

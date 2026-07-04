@@ -37,6 +37,7 @@ from parsing import parse_commands  # noqa: E402
 from pattern_tracker import PatternTracker  # noqa: E402
 from tactics import tactics_report  # noqa: E402
 from overrides import apply_overrides  # noqa: E402
+from tuning import apply_tuning  # noqa: E402
 from analyze_match import analyze  # noqa: E402
 
 TEAM_ID = 0  # train as HOME, attacking +x
@@ -174,7 +175,8 @@ def run_position(mod, pid, label, scenarios, use_llm, team_tag):
             summary = f"{summary}\n\n{tactics}"
 
         source, cmds, latency_ms, ov = "fallback", None, None, None
-        override_cfg = getattr(mod, "OVERRIDE_CONFIG", None)
+        # Same tuning overlay the deployed handler applies at startup
+        override_cfg = apply_tuning(getattr(mod, "OVERRIDE_CONFIG", None), label)
         if use_llm:
             try:
                 agent.messages = []

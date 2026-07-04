@@ -426,6 +426,61 @@ iter-9 的回答是把「对方压上 → 我们打身后」变成代码级流�
 
 ---
 
+## 自动循环迭代（Autopilot + Playwright，iter-10）
+
+「打一场 → 拉日志 → 调参 → 重新部署」的整条链路现在可以无人值守跑：
+
+```
+┌─────────┐   Playwright    ┌──────────┐   Logs Insights   ┌────────┐
+│ 门户约赛 │ ──────────────> │ 等终场比分 │ ────────────────> │ KPI 分析 │
+└─────────┘                 └──────────┘                   └───┬────┘
+     ▲                                                         │
+     │        WSL deploy-wsl.sh          lib/tuning.json       ▼
+┌────┴────┐ <────────────────────── ┌──────────────────────────────┐
+│ 重新部署 │                        │ 调参器（规则 / --llm-advisor）│
+└─────────┘                        └──────────────────────────────┘
+```
+
+三个新组件：
+
+| 文件 | 作用 |
+|------|------|
+| `portal_bot.py` | Playwright 驱动 [agentic-football.aws.dev](https://agentic-football.aws.dev/)：队伍码登录（会话持久化在 `.portal-profile/`）、`POST /practice-matches` 约 bot 练习赛（balanced=The Benchmark FC / aggressive=Total Attack United / defensive=Fort Knox Athletic）、打开真实观赛页、轮询终场比分、可发教练指令 |
+| `lib/tuning.py` + `lib/tuning.json` | **部署期调参面**：autopilot 只改 `tuning.json`，agent 启动时叠加到各自的 `OverrideConfig` 上（global → 按位置覆盖）。所有数值被 `BOUNDS` 钳制，调参器永远写不出离谱值；文件为空 = 行为与 iter-9 完全一致 |
+| `autopilot.py` | 循环编排：比赛 → `collect_kpis()`（射门纪律 / 远射浪费 / 控球高度 / 被围攻指标）→ 调参（默认规则调参器，`--llm-advisor` 让 Nova Lite 在同样的 BOUNDS 内提案）→ WSL 逐 agent 重部署（S3 超时自动重试、凭证过期立即停）→ `autopilot_history.jsonl` 记录每轮配置与结果 |
+
+使用：
+
+```powershell
+# 一次性：安装 Playwright + Chromium
+pip install playwright
+python -m playwright install chromium
+
+# 一次性：登录门户（弹出浏览器，输入 TEAM CODE 后会话自动保存）
+python portal_bot.py setup --team-code <你的队伍码>
+
+# 三轮自动迭代（约赛 → 分析 → 调参 → 重部署）
+python autopilot.py --iterations 3
+
+# 轮换对手 / 观看直播 / 只调参不部署 / LLM 提案
+python autopilot.py --bots aggressive,defensive,balanced
+python autopilot.py --once --headed
+python autopilot.py --once --skip-deploy
+python autopilot.py --llm-advisor
+
+# 手动打一场看结果（退出码 0=赢）
+python portal_bot.py match --bot aggressive --headed
+```
+
+调参器的规则沿用 iter-6→9 的手工经验：丢 3 球以上 → 提前进入反击姿态（`press_bodies -1`）+ 扩大盯人半径；远射占比 >40% → 收紧 `longshot_max`、提高 `gk_out_dist` 门槛；0 进球且射门 <8 → `shoot_threshold +2` 提前开火；控球率 <35% → 降低 `outlet_min_gain` 让解压传球更容易出脚；**赢球则冻结配置**。每一轮的 KPI、调参前后对照、部署结果都会追加到 `autopilot_history.jsonl`，这就是整个循环的「经验」。
+
+注意：
+- 门户会话（`.portal-profile/`）和历史（`autopilot_history.jsonl`）已加入 `.gitignore`，不会提交；
+- 需要有效的 AWS 凭证（CloudWatch 查询在 Windows 侧、部署在 WSL 侧），过期时 autopilot 会明确报错停止而不是带病循环；
+- 回归测试 Scenario L 覆盖 tuning 叠加/钳制/不可变性；训练场（`training_ground.py`）同样叠加 tuning，本地模拟与线上行为一致。
+
+---
+
 ## 常见问题
 
 ### `aws` 命令找不到
