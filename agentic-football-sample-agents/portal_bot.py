@@ -128,6 +128,8 @@ class PortalBot:
                 "No portal session. Run: python portal_bot.py setup --team-code <CODE>")
 
         team = self.api("GET", "/teams/mine")
+        if isinstance(team.get("items"), list):  # endpoint wraps the team in items[]
+            team = team["items"][0] if team["items"] else {}
         if not team or not (team.get("team_id") or team.get("id")):
             raise PortalError(f"/teams/mine returned no team: {team}")
         team["team_id"] = team.get("team_id") or team.get("id")

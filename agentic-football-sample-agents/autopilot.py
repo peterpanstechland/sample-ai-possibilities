@@ -41,6 +41,9 @@ import boto3
 REPO = Path(__file__).parent
 sys.path.insert(0, str(REPO / "lib"))
 
+# Live progress even when stdout is a file/pipe (background runs)
+sys.stdout.reconfigure(line_buffering=True)
+
 import tuning as tuning_mod  # noqa: E402
 from analyze_match import find_log_groups, run_query  # noqa: E402
 from portal_bot import BOTS, PortalError, play_one_match  # noqa: E402
