@@ -320,6 +320,23 @@ Agent 每个 tick 会向 CloudWatch Logs 写一条结构化 `DECISION` 日志（
 
 打完一场比赛后运行，输出逐 agent 的统计与调优建议（例如「FWD1 一直在带球不射门」）。
 
+### 本地训练场（不用部署就能测策略）
+
+```powershell
+.venv\Scripts\python training_ground.py          # 只跑规则 fallback，免费
+.venv\Scripts\python training_ground.py --llm    # 真实调用 Nova Micro（需要 AWS 凭证）
+```
+
+把 5 个 agent 灌入约 23 个典型场景（开球、进攻梯度、防守、追自由球、落后/领先残局、教练指令），
+产出与实战完全同格式的 DECISION 日志（写入 `training_logs/*.jsonl`）。
+观测台切到「训练场」看单独数据，切到「对比：实战 vs 训练」逐位置对比射门率、MOVE_TO 率、延迟——
+若实战射门率明显低于训练，通常是实战状态注入或对手压迫的问题，而不是提示词本身。
+
+### 实时调整队员（教练指令）
+
+比赛过程中在 Player Portal 发送的 teamChat 消息会作为 `COACH ORDER` 注入所有 agent 的提示词，
+优先级高于既定战术——比如打字「全员压上，多射门」即可实时改变全队行为，不需要重新部署。
+
 ---
 
 ## 常见问题

@@ -67,7 +67,32 @@ gs3["ball"]["position"] = {"x": 50.0, "y": 0.0, "z": 0}
 summary3 = summarize_state(gs3, 0, 0, "GK")
 assert "hasBall=False" in summary3, "our GK must not think it holds the opponent GK's ball"
 
+# --- Scenario D: state enrichment (coach orders, free ball, stamina, lastAction) ---
+gs4 = copy.deepcopy(GAME_STATE)
+gs4["ball"]["possessionAgentId"] = None
+gs4["ball"]["isFree"] = True
+gs4["ball"]["velocity"] = {"x": 3.0, "y": -1.0, "z": 0}
+gs4["teamChat"] = [{"message": "全员压上，多射门"}]
+gs4["playMode"] = "FREE_KICK"
+for p in gs4["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
+        p["stamina"] = 10
+        p["lastAction"] = "MOVE_TO"
+summary4 = summarize_state(gs4, 0, 3, "FWD1")
+assert "FREE ball" in summary4 and "heading to" in summary4, summary4
+assert "COACH ORDER" in summary4 and "全员压上" in summary4, summary4
+assert "RESTART (FREE_KICK)" in summary4, summary4
+assert "LOW STAMINA" in summary4, summary4
+assert "lastAction=MOVE_TO" in summary4, summary4
+
+# string-typed teamChat entries also work; no coach line when chat empty
+gs5 = copy.deepcopy(GAME_STATE)
+gs5["teamChat"] = ["press high"]
+assert "COACH ORDER (obey immediately, overrides tactics): press high" in summarize_state(gs5, 0, 3, "FWD1")
+assert "COACH ORDER" not in summarize_state(GAME_STATE, 0, 3, "FWD1")
+
 print("Scenario A (away P3 holds): home view OPP / away view MY — OK")
 print("Scenario B (home P3 holds): hasBall=True + SHOOT NOW CENTER 1.0 — OK")
 print("Scenario C (opp GK holds): our GK hasBall=False — OK")
+print("Scenario D (coach/free-ball/stamina/lastAction enrichment) — OK")
 print("ALL POSSESSION TESTS PASSED")

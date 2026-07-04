@@ -84,6 +84,26 @@ def get_possession_info(ball: dict, players: list, team_id: int) -> tuple:
     return None, "free", False
 
 
+def _coach_orders(game_state: dict) -> str:
+    """Latest live instructions typed in the Player Portal (teamChat array).
+
+    Entries may be plain strings or dicts; formats vary, so try common keys.
+    """
+    chat = game_state.get("teamChat") or []
+    msgs = []
+    for entry in chat[-2:]:  # newest couple of orders only
+        if isinstance(entry, str):
+            m = entry.strip()
+        elif isinstance(entry, dict):
+            m = str(entry.get("message") or entry.get("text") or entry.get("content")
+                    or entry.get("instruction") or "").strip()
+        else:
+            m = ""
+        if m:
+            msgs.append(m)
+    return " | ".join(msgs)[:240]
+
+
 def summarize_state(
     game_state: dict,
     team_id: int,
@@ -112,27 +132,53 @@ def summarize_state(
 
     my_goal_x, opp_goal_x = get_goal_positions(team_id)
 
+    # Ball line: position, holder, velocity when it matters (free / rolling)
+    ball_vel = ball.get("velocity", {}) or {}
+    vx, vy = ball_vel.get("x", 0) or 0, ball_vel.get("y", 0) or 0
+    ball_line = f"Ball: ({ball_pos.get('x',0):.1f}, {ball_pos.get('y',0):.1f}) held by {ball_status}"
+    is_free = ball.get("isFree", ball_status == "free")
+    if is_free and possession_id is None:
+        # Predicted spot ~1s ahead helps intercept decisions
+        ball_line += (f" | FREE ball, vel=({vx:.1f},{vy:.1f}), "
+                      f"heading to ({ball_pos.get('x',0)+vx:.0f},{ball_pos.get('y',0)+vy:.0f}) — nearest player should chase it")
+
     lines = [
         f"Time: {game_time:.0f}s | Score: {score.get('home',0)}-{score.get('away',0)} | "
         f"Team: {team_id} ({'HOME' if team_id == 0 else 'AWAY'}) | PlayMode: {play_mode}",
-        f"Ball: ({ball_pos.get('x',0):.1f}, {ball_pos.get('y',0):.1f}) held by {ball_status}",
+        ball_line,
         f"Your goal at x={my_goal_x:.0f} | Opponent goal at x={opp_goal_x:.0f}",
-        "",
     ]
+
+    # Live coach orders from the Player Portal — highest priority for the LLM
+    coach = _coach_orders(game_state)
+    if coach:
+        lines.append(f"COACH ORDER (obey immediately, overrides tactics): {coach}")
+
+    # Restart situations: act before the opponent settles
+    if isinstance(play_mode, str) and play_mode not in ("OPEN_PLAY", "", "0"):
+        lines.append(f"RESTART ({play_mode}): ball is in play from a set piece — act FAST, don't stand still.")
+
+    lines.append("")
 
     # My player info
     if me:
         pos = me.get("position", {})
         stam = me.get("stamina", 100)
+        if isinstance(stam, (int, float)) and 0 <= stam <= 1:
+            stam = stam * 100  # some servers send stamina as a 0-1 fraction
         dist_ball = dist(pos, ball_pos)
         holder = resolve_holder(ball, players)
         has_ball = holder is me  # team-aware: my idx AND my team hold the ball
         extra = f" distOppGoal={abs(pos.get('x', 0) - opp_goal_x):.1f}" if position_label in ("MID", "FWD1", "FWD2") else ""
+        last_action = me.get("lastAction") or me.get("currentAction")
+        last = f" lastAction={last_action}" if last_action else ""
         lines.append(
             f">>> YOUR PLAYER ({position_label}, id={my_player_id}): "
             f"pos=({pos.get('x',0):.1f},{pos.get('y',0):.1f}) "
-            f"stam={stam:.0f} distBall={dist_ball:.1f}{extra} hasBall={has_ball}"
+            f"stam={stam:.0f} distBall={dist_ball:.1f}{extra} hasBall={has_ball}{last}"
         )
+        if stam < 25:
+            lines.append("LOW STAMINA: avoid sprint unless it creates a shot — walk into position instead.")
     lines.append("")
 
     # Teammates
