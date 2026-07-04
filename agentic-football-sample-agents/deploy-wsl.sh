@@ -13,8 +13,10 @@ chmod +x "$TOOLS_BIN/aws"
 # Remove stale Windows uv wrapper if present (breaks /mnt/c cross-compile)
 rm -f "$TOOLS_BIN/uv"
 
-# Linux uv (Windows uv.exe cannot read /mnt/c paths during cross-compile)
-if ! command -v uv >/dev/null 2>&1; then
+# Linux uv (Windows uv.exe cannot read /mnt/c paths during cross-compile).
+# `wsl bash -c` doesn't source .profile so ~/.local/bin is off PATH — check the
+# actual binary path before doing a slow curl re-download from astral.sh.
+if [ ! -x "$HOME/.local/bin/uv" ] && ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
 fi
 # Linux uv must come before any Windows uv.exe on PATH (Windows uv cannot read /mnt/c paths)

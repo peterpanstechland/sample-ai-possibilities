@@ -31,6 +31,16 @@ class FallbackConfig:
     press_distance: float = 20.0
     press_intensity: float = 0.7
     press_duration: int = 3
+    press_only_if_designated: bool = False
+    """When True, only PRESS_BALL if I am my team's closest player to the ball.
+    Non-pressing teammates fall through to off_ball_action instead — this stops
+    five agents piling into the same PRESS every tick (real observed: 200+ press
+    commands per match)."""
+
+    off_ball_action: str = "MOVE_TO"
+    """What non-designated players do when opponent has the ball: 'MOVE_TO'
+    (current, drift to default position) or 'MARK' (tight-mark nearest opponent
+    within 25 units)."""
 
     # Shoot threshold (distance to opp goal) — shoot-first policy:
     # any look inside 45 is a full-power shot at CENTER, never a dribble
@@ -179,8 +189,36 @@ def build_fallback(cfg: FallbackConfig) -> Callable[[dict, int, int], list[dict]
         # --- Press if close to ball and opponent has it ---
         _, _, we_have_ball = get_possession_info(ball, players, team_id)
         if not we_have_ball and dist(pos, ball_pos) < cfg.press_distance:
+            # Convention-based orchestration: only the team's closest player
+            # actually presses, everyone else marks / holds shape. Without this
+            # we saw 200+ PRESS_BALL per match while conceding on the counter.
+            if cfg.press_only_if_designated:
+                team_mates = [p for p in players if _is_my_team(p, team_id)]
+                closest = min(team_mates, key=lambda p: dist(p.get("position", {}), ball_pos))
+                if _player_idx(closest) != my_player_id:
+                    if cfg.off_ball_action == "MARK":
+                        opponents = [p for p in players if not _is_my_team(p, team_id)]
+                        near = [o for o in opponents if dist(o.get("position", {}), pos) < 25]
+                        if near:
+                            target = min(near, key=lambda p: dist(p.get("position", {}), pos))
+                            return [_cmd("MARK", my_player_id, team_id,
+                                         {"target_player_id": _player_idx(target),
+                                          "tightness": "TIGHT"}, duration=3)]
+                    tx, ty = _default_pos(cfg, my_goal_x, opp_goal_x, ball_pos)
+                    return [_cmd("MOVE_TO", my_player_id, team_id,
+                                 {"target_x": tx, "target_y": ty, "sprint": False})]
             return [_cmd("PRESS_BALL", my_player_id, team_id,
                          {"intensity": cfg.press_intensity}, duration=cfg.press_duration)]
+
+        # --- Off-ball MARK (when opponent has ball but I'm out of press range) ---
+        if not we_have_ball and cfg.off_ball_action == "MARK":
+            opponents = [p for p in players if not _is_my_team(p, team_id)]
+            near = [o for o in opponents if dist(o.get("position", {}), pos) < 25]
+            if near:
+                target = min(near, key=lambda p: dist(p.get("position", {}), pos))
+                return [_cmd("MARK", my_player_id, team_id,
+                             {"target_player_id": _player_idx(target),
+                              "tightness": "TIGHT"}, duration=3)]
 
         # --- Default position ---
         tx, ty = _default_pos(cfg, my_goal_x, opp_goal_x, ball_pos)
@@ -221,7 +259,8 @@ def _on_ball(cfg, game_state, players, team_id, my_player_id, pos, my_goal_x, op
                      {"target_player_id": 2, "type": "GROUND"})]
 
     if cfg.possession_action == "SHOOT_OR_PASS":
-        if abs(pos.get("x", 0) - opp_goal_x) < cfg.shoot_threshold:
+        # <= to match the prompt rule "distOppGoal<=45: SHOOT"
+        if abs(pos.get("x", 0) - opp_goal_x) <= cfg.shoot_threshold:
             return [_cmd("SHOOT", my_player_id, team_id,
                          {"aim_location": cfg.shoot_aim, "power": cfg.shoot_power})]
         forwards = [p for p in players if _is_my_team(p, team_id) and _player_idx(p) in (3, 4)]
@@ -233,7 +272,8 @@ def _on_ball(cfg, game_state, players, team_id, my_player_id, pos, my_goal_x, op
                      {"target_player_id": 3, "type": "GROUND"})]
 
     if cfg.possession_action == "SHOOT_OR_ADVANCE":
-        if abs(pos.get("x", 0) - opp_goal_x) < cfg.shoot_threshold:
+        # <= to match the prompt rule "distOppGoal<=45: SHOOT"
+        if abs(pos.get("x", 0) - opp_goal_x) <= cfg.shoot_threshold:
             return [_cmd("SHOOT", my_player_id, team_id,
                          {"aim_location": cfg.shoot_aim, "power": cfg.shoot_power})]
         return [_cmd("MOVE_TO", my_player_id, team_id,

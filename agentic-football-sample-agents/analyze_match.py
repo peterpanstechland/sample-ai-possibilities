@@ -113,9 +113,20 @@ def aggregate(rows: list[dict]) -> list[dict]:
                      if i.get("source") == "llm" and isinstance(i.get("latency_ms"), (int, float)))
         chars = [i["prompt_chars"] for i in items if isinstance(i.get("prompt_chars"), (int, float))]
 
+        # Shot discipline: of ticks where the player HELD the ball within
+        # shooting range (45), how many produced a SHOOT? This is the true
+        # "are we executing the strategy" number — plain shot counts are
+        # diluted by all the ticks spent without the ball.
+        chances = [i for i in items
+                   if i.get("hb") == 1 and isinstance(i.get("dg"), (int, float)) and i["dg"] <= 45]
+        chance_shots = sum(1 for i in chances if i.get("cmd") == "SHOOT")
+
         recs = []
         llm_ratio = sources.get("llm", 0) / n
         pf = sources.get("parse-fallback", 0)
+        if len(chances) >= 3 and chance_shots / len(chances) < 0.6 and pos != "GK":
+            recs.append(f"shot discipline {chance_shots}/{len(chances)}: held the ball in range "
+                        f"but didn't shoot — RULE #1 is being ignored, tighten the prompt")
         if pf / n > 0.05:
             recs.append(f"parse-fallback {pf}/{n}: LLM output drifting from pure JSON — "
                         f"tighten the response format section or lower temperature")
@@ -154,6 +165,7 @@ def aggregate(rows: list[dict]) -> list[dict]:
             },
             "commands": dict(cmds.most_common()),
             "shots": cmds.get("SHOOT", 0),
+            "discipline": {"chances": len(chances), "shots": chance_shots},
             "recommendations": recs,
         })
     return agents
@@ -177,6 +189,9 @@ def analyze(rows: list[dict]) -> str:
             out.append(f"  prompt chars: avg={a['prompt_chars']['avg']} max={a['prompt_chars']['max']}")
         top_cmds = ", ".join(f"{c}: {k}" for c, k in Counter(a["commands"]).most_common(5))
         out.append(f"  commands: {top_cmds}")
+        if a["discipline"]["chances"]:
+            out.append(f"  shot discipline: {a['discipline']['shots']}/{a['discipline']['chances']} "
+                       f"(shots taken / ticks holding ball within 45)")
         recs = a["recommendations"]
         out.append("  recommendations:" if recs else "  recommendations: none — healthy")
         for r_ in recs:

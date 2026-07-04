@@ -165,6 +165,8 @@ function agentCard(a) {
   const recs = a.recommendations.length
     ? `<ul class="recs">${a.recommendations.map(r=>`<li>${r}</li>`).join("")}</ul>`
     : `<div class="healthy">健康 — 无建议</div>`;
+  const disc = a.discipline && a.discipline.chances
+    ? `<div class="kpi"><div class="v">${a.discipline.shots}/${a.discipline.chances}</div><div class="l">把握射门</div></div>` : "";
   return `
     <div class="card">
       <h2><span style="color:${POS_COLORS[a.pos]||"#fff"}">${a.pos}</span><span>${a.shots} 射门</span></h2>
@@ -174,6 +176,7 @@ function agentCard(a) {
         <div class="kpi"><div class="v">${Math.round(100*a.llm_ratio)}%</div><div class="l">LLM 决策</div></div>
         <div class="kpi"><div class="v">${a.latency.p50 ?? "—"}</div><div class="l">p50 ms</div></div>
         <div class="kpi"><div class="v">${a.latency.p95 ?? "—"}</div><div class="l">p95 ms</div></div>
+        ${disc}
       </div>
       <div class="srcbar">${srcbar}</div>
       <div class="cmds">${cmds}</div>
@@ -193,6 +196,8 @@ function compareCard(pos, c, l) {
   };
   const shootC = c ? pct(c.shots, c.ticks) : null, shootL = l ? pct(l.shots, l.ticks) : null;
   const moveC = c ? pct(c.commands.MOVE_TO||0, c.ticks) : null, moveL = l ? pct(l.commands.MOVE_TO||0, l.ticks) : null;
+  const discC = c?.discipline?.chances ? pct(c.discipline.shots, c.discipline.chances) : null;
+  const discL = l?.discipline?.chances ? pct(l.discipline.shots, l.discipline.chances) : null;
   return `
     <div class="card">
       <h2><span style="color:${POS_COLORS[pos]||"#fff"}">${pos}</span>
@@ -201,6 +206,7 @@ function compareCard(pos, c, l) {
         <tr><th></th><th>实战</th><th>训练</th><th>Δ</th></tr>
         ${row("ticks", c?.ticks, l?.ticks, false)}
         ${row("射门 %", shootC, shootL, true)}
+        ${row("把握射门 %", discC, discL, true)}
         ${row("MOVE_TO %", moveC, moveL, true)}
         ${row("LLM %", c ? Math.round(100*c.llm_ratio) : null, l ? Math.round(100*l.llm_ratio) : null, false)}
         ${row("p50 ms", c?.latency.p50, l?.latency.p50, false)}

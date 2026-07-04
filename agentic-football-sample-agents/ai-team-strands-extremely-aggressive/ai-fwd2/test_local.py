@@ -1,4 +1,4 @@
-﻿"""Local test for the FWD2 agent (Extremely Aggressive) — tests state summary, parsing, fallback, and LLM."""
+"""Local test for the FWD2 agent (Extremely Aggressive) — tests state summary, parsing, fallback, and LLM."""
 
 import json
 import sys
@@ -58,7 +58,7 @@ def test_fallback_advance():
     print(f"=== FALLBACK ADVANCE ({POSITION_LABEL}) ===")
     state = json.loads(json.dumps(GAME_STATE))
     state["ball"]["possessionAgentId"] = f"agentId_{MY_PLAYER_ID}"
-    state["players"][4]["position"] = {"x": 10, "y": 8}  # far from goal
+    state["players"][4]["position"] = {"x": 5, "y": 8}  # out of shooting range (dist 50 > 45)
     state["ball"]["position"] = dict(state["players"][MY_PLAYER_ID]["position"])  # ball at holder's feet
     cmds = fallback_commands(state, TEAM_ID, MY_PLAYER_ID)
     for c in cmds:

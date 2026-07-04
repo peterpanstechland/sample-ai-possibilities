@@ -19,10 +19,74 @@ def _dist(a, b) -> float:
     return math.sqrt((a.get("x", 0) - b.get("x", 0)) ** 2 + (a.get("y", 0) - b.get("y", 0)) ** 2)
 
 
-def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x) -> str:
-    """Shot probability from evaluate_shot math; recommendation kept simple:
-    whenever in range, SHOOT CENTER at full power (dribbling to the byline
-    loses possession far more often than a hard shot misses)."""
+def _lane_perp(me_pos, opp_goal_x, opponents, aim_y):
+    """Minimum perpendicular distance from any blocking opponent to the shot
+    line me_pos -> (opp_goal_x, aim_y). Higher = clearer lane.
+    """
+    dx_goal = opp_goal_x - me_pos.get("x", 0)
+    dy_goal = aim_y - me_pos.get("y", 0)
+    length = math.hypot(dx_goal, dy_goal) or 1.0
+    best = math.inf
+    for o in opponents:
+        p = o.get("position", {}) or {}
+        px = p.get("x", 0) - me_pos.get("x", 0)
+        py = p.get("y", 0) - me_pos.get("y", 0)
+        t = (px * dx_goal + py * dy_goal) / (length ** 2)
+        if not 0.05 < t < 0.98:  # only count opponents between me and the goal
+            continue
+        perp = abs((py * dx_goal - px * dy_goal) / length)
+        if perp < best:
+            best = perp
+    return best
+
+
+def _best_shot_aim(me_pos, opp_goal_x, opponents) -> tuple[str, float, float]:
+    """Pick the goal-frame target with the clearest lane. Returns
+    (aim_location, aim_y, perp) — perp measures how open that target is.
+    Aim locations map to y offsets inside the 10-unit goal frame; the goal
+    center is (opp_goal_x, 0), the corners are at y = ±4."""
+    # Candidates ordered by preference: CENTER first (biggest goal target),
+    # then far corners so the LLM ends up shooting at TR/TL/BR/BL when the
+    # keeper is centrally positioned.
+    aims = [("CENTER", 0.0), ("TL", -4.0), ("TR", 4.0), ("BL", -4.0), ("BR", 4.0)]
+    seen = set()
+    best_aim, best_y, best_perp = "CENTER", 0.0, -1.0
+    for name, y in aims:
+        if y in seen:
+            continue
+        seen.add(y)
+        perp = _lane_perp(me_pos, opp_goal_x, opponents, y)
+        if perp > best_perp:
+            best_aim, best_y, best_perp = name, y, perp
+    return best_aim, best_y, best_perp
+
+
+def _lane_blocked(me_pos, opp_goal_x, opponents, lane_radius=None) -> tuple[bool, float]:
+    """Legacy helper kept for tests: is the CENTER shot line blocked, and by
+    how much should we sidestep to clear it? Adaptive lane radius — close-range
+    hard shots slip past slight overlaps."""
+    dx_goal = opp_goal_x - me_pos.get("x", 0)
+    if abs(dx_goal) < 0.1:
+        return False, 0.0
+    if lane_radius is None:
+        d = math.hypot(dx_goal, -me_pos.get("y", 0))
+        lane_radius = 1.5 if d <= 25 else 2.5
+
+    center_perp = _lane_perp(me_pos, opp_goal_x, opponents, 0.0)
+    if center_perp >= lane_radius:
+        return False, 0.0
+
+    for off in (3, -3, 6, -6, 9, -9, 12, -12):
+        if _lane_perp(me_pos, opp_goal_x, opponents, me_pos.get("y", 0) + off) >= lane_radius:
+            return True, float(off)
+    return True, 0.0
+
+
+def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x) -> tuple[str, bool, float]:
+    """Shot probability + lane check. Also returns (blocked, y_offset) so the
+    caller can add a follow-up TACTICS line telling the agent to shift laterally
+    before shooting (rather than blindly firing into a defender's shins).
+    """
     goal = {"x": opp_goal_x, "y": 0}
     d_goal = _dist(me_pos, goal)
 
@@ -44,11 +108,36 @@ def _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x) -> str:
     p = max(0.02, min(0.95, distance_factor * 0.45 + angle_factor * 0.25
                       + gk_factor + gk_dist_factor - blocker_penalty))
 
-    if d_goal <= 45:
-        verdict = "SHOOT NOW: aim CENTER power 1.0"
-    else:
+    # Adaptive radius: close-range hard shots slip past slight overlaps.
+    lane_radius = 1.5 if d_goal <= 25 else 2.5
+    aim, _aim_y, aim_perp = _best_shot_aim(me_pos, opp_goal_x, opponents)
+    lane_clear = aim_perp >= lane_radius
+
+    if d_goal > 45:
         verdict = "out of range: sprint toward goal, shoot the moment dist<=45"
-    return f"- Shot: {round(p * 100)}% (dist {d_goal:.0f} to goal) -> {verdict}"
+        blocked = False
+    elif lane_clear:
+        # A corner aim through a clear lane is a single-tick shot — never leave
+        # a good look on the table just because CENTER is covered.
+        verdict = f"LANE CLEAR ({aim}) — SHOOT NOW: aim {aim} power 1.0"
+        blocked = False
+    elif d_goal <= 15:
+        # Point-blank — a full-power CENTER shot beats a defender's shins.
+        verdict = "POINT-BLANK — SHOOT NOW: aim CENTER power 1.0"
+        blocked = False
+    else:
+        # Every corner blocked at range — sidestep one tick, then shoot.
+        _blocked, y_off = _lane_blocked(me_pos, opp_goal_x, opponents, lane_radius)
+        if y_off != 0.0:
+            adv_x = me_pos.get("x", 0) + (2 if opp_goal_x > 0 else -2)
+            verdict = (f"LANE BLOCKED all corners — first MOVE_TO "
+                       f"({adv_x:.0f},{me_pos.get('y',0) + y_off:.0f}) sprint true, "
+                       f"then SHOOT next tick")
+        else:
+            verdict = "LANE BLOCKED all corners — PASS to a free teammate"
+        blocked = True
+    return (f"- Shot: {round(p * 100)}% (dist {d_goal:.0f} to goal) -> {verdict}",
+            blocked, 0.0)
 
 
 def _pass_line(me_pos, my_id, teammates, opponents) -> str:
@@ -160,7 +249,8 @@ def tactics_report(game_state: dict, team_id: int, my_player_id: int, position_l
 
     lines = []
     if i_have_ball:
-        lines.append(_shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x))
+        shot, _blocked, _y_off = _shot_line(me_pos, opp_gk_pos, opponents, opp_goal_x)
+        lines.append(shot)
         pass_line = _pass_line(me_pos, my_player_id, my_team, opponents)
         if pass_line:
             lines.append(pass_line)

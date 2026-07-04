@@ -310,7 +310,7 @@ Agent 每个 tick 会向 CloudWatch Logs 写一条结构化 `DECISION` 日志（
 .venv\Scripts\python observe_dashboard.py --prefix agg_    # 打开 http://localhost:8777
 ```
 
-本地网页，每 30 秒自动刷新，展示每个 agent 的：决策来源占比（LLM vs fallback）、延迟 p50/p95、**射门次数**、指令分布、调优建议，以及全队延迟散点图。参数：`--prefix`（runtime 名前缀，如 `agg_`）、`--minutes`、`--port`、`--region`。
+本地网页，每 30 秒自动刷新，展示每个 agent 的：决策来源占比（LLM vs fallback）、延迟 p50/p95、**射门次数**、**把握射门**（持球进入 45 射程时真的射了几次——衡量策略是否被执行的核心指标）、指令分布、调优建议，以及全队延迟散点图。参数：`--prefix`（runtime 名前缀，如 `agg_`）、`--minutes`、`--port`、`--region`。
 
 ### 命令行报告
 
@@ -336,6 +336,46 @@ Agent 每个 tick 会向 CloudWatch Logs 写一条结构化 `DECISION` 日志（
 
 比赛过程中在 Player Portal 发送的 teamChat 消息会作为 `COACH ORDER` 注入所有 agent 的提示词，
 优先级高于既定战术——比如打字「全员压上，多射门」即可实时改变全队行为，不需要重新部署。
+
+---
+
+## 五人协同（无消息通道的编排）
+
+平台上 5 个 agent 各自独立运行、互相不能通信。协同的实现方式是**约定式编排**：
+所有 agent 从同一份 game state 用同一条确定性规则推导分工，天然达成一致：
+
+- **自由球**：只有全队离球最近的那名球员收到「ASSIGNMENT: 你去追」，其余人收到「P{n} 去追，你保持站位/跑位」——不再出现五人抢一球；
+- **对方持球**：离球最近者是「指定逼抢人」，其余人被指示去封传球线路/盯防接应点；
+- **残局策略**：比赛 200 秒后按比分自动注入 `GAME PLAN`（落后=全员压上赌进攻；领先=保持阵型稳妥出球；平局=高位逼抢抢绝杀）；
+- **进攻跑位**（提示词层）：一名前锋持球时另一名前锋插远门柱抢补射，中场在禁区弧顶拖后接第二点，后卫回收到中圈当安全阀。
+
+另有**指令护栏**（`lib/parsing.py`）：LLM 输出的坐标越界自动收进场内、射门力量钳到 (0,1]、
+非法瞄准点归一为 CENTER、传给自己/不存在的队友自动改传前锋——坏输出不再浪费一个 tick。
+
+## 射门决策（LANE 检测 + 角球瞄准）
+
+早期版本让所有位置只朝 y=0（正中）射门，全队跑到禁区中央被对方后卫直接堵死。iter-7 起
+`lib/tactics.py` 的 `_shot_line` 会：
+
+1. 在 CENTER/TL/TR/BL/BR 五个瞄准点里挑一条**通道最开**的射门线，直接给出 `SHOOT aim <X> power 1.0`；
+2. 五角全被封时，判断距离——`dist<=15` 直接近距离全力 CENTER 硬射（对方脚下也能穿过），
+   否则给出**横向微调 MOVE_TO**（1 tick 侧步）＋下一 tick 再射；
+3. 所有五个 agent 提示词只要照 TACTICS Shot 那行的动词做，**每次持球必产出一次射门/横移**，
+   不再出现「刷 SHOOT 120 次却只有 6 次真射到框」的问题；
+4. Fallback 也全员打开射门（DEF `possession_action="SHOOT_OR_PASS"`），GK 拿球进入 45 内也射。
+
+## 减少无脑逼抢
+
+真实赛后统计里 `PRESS_BALL` 一场刷了 194–242 条，全队一起冲球，防线露出空档。iter-7 起
+`FallbackConfig` 增加 `press_only_if_designated=True` 和 `off_ball_action="MARK"`：
+只有离球最近的那名队员会 PRESS，其余人自动切换到 MARK（对方最近球员盯防）或保持站位。
+在训练场 46 tick 里 PRESS 从平均 ~40 降到 5，MARK 出现 2 次，DEF/MID 保持阵型稳定。
+
+## 边路进攻，不往中间挤
+
+前锋提示词里的默认位置和 `advance_y` 从 y=±8 拉到 **y=±14**（左/右边路）；持球远离禁区时
+`MOVE_TO` 目标是「opp_goal_x*0.75, y=±14」的边路空当，而不是正中的后卫堆。
+另有明确规则「Do NOT run down the center, that is a defender highway」。
 
 ---
 

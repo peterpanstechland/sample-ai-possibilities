@@ -32,7 +32,7 @@ sys.path.insert(0, str(BASE / "lib"))
 from test_helpers import mock_agentcore  # noqa: E402
 mock_agentcore()  # must run before any agent main.py import
 
-from state import summarize_state  # noqa: E402
+from state import summarize_state, possession_context  # noqa: E402
 from parsing import parse_commands  # noqa: E402
 from pattern_tracker import PatternTracker  # noqa: E402
 from tactics import tactics_report  # noqa: E402
@@ -190,11 +190,13 @@ def run_position(mod, pid, label, scenarios, use_llm, team_tag):
         else:
             cmds = mod.fallback_commands(gs, TEAM_ID, pid)
 
+        hb, dg = possession_context(gs, TEAM_ID, pid)
         rows.append({
             "pos": label, "tick": gs["tick"], "t": round(gs["gameTime"]),
             "source": source,
             "cmd": cmds[0].get("commandType") if cmds else None,
             "latency_ms": latency_ms, "prompt_chars": len(summary),
+            "hb": hb, "dg": dg,
             "scenario": scen_name,
             "_log": f"training/{team_tag}", "_ts": int(time.time() * 1000),
         })

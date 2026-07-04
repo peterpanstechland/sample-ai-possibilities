@@ -84,6 +84,24 @@ def get_possession_info(ball: dict, players: list, team_id: int) -> tuple:
     return None, "free", False
 
 
+def possession_context(game_state: dict, team_id: int, my_player_id: int) -> tuple:
+    """(has_ball 0/1, dist_to_opp_goal or None) for observability logging.
+
+    Lets the analyzer measure shot discipline — of the ticks where this player
+    actually held the ball in range, how many produced a SHOOT?
+    """
+    ball = game_state.get("ball", {}) or {}
+    players = game_state.get("players", []) or []
+    me = next((p for p in players
+               if _player_idx(p) == my_player_id and _is_my_team(p, team_id)), None)
+    if me is None:
+        return 0, None
+    holder = resolve_holder(ball, players)
+    _, opp_goal_x = get_goal_positions(team_id)
+    d_goal = round(dist(me.get("position", {}) or {}, {"x": opp_goal_x, "y": 0}))
+    return (1 if holder is me else 0), d_goal
+
+
 def _coach_orders(game_state: dict) -> str:
     """Latest live instructions typed in the Player Portal (teamChat array).
 
@@ -128,7 +146,7 @@ def summarize_state(
     )
 
     me = next((p for p in my_team if _player_idx(p) == my_player_id), None)
-    possession_id, ball_status, _ = get_possession_info(ball, players, team_id)
+    possession_id, ball_status, we_have_ball = get_possession_info(ball, players, team_id)
 
     my_goal_x, opp_goal_x = get_goal_positions(team_id)
 
@@ -154,9 +172,36 @@ def summarize_state(
     if coach:
         lines.append(f"COACH ORDER (obey immediately, overrides tactics): {coach}")
 
+    # Game plan for the closing minutes, derived from score + clock
+    my_score = score.get("home", 0) if team_id == 0 else score.get("away", 0)
+    opp_score = score.get("away", 0) if team_id == 0 else score.get("home", 0)
+    if game_time >= 200:
+        if my_score < opp_score:
+            lines.append("GAME PLAN: trailing late — maximum risk. Everyone attacks, shoot on ANY sight of goal.")
+        elif my_score > opp_score:
+            lines.append("GAME PLAN: leading late — keep shape, no risky passes near your own box, still shoot when open.")
+        else:
+            lines.append("GAME PLAN: tied late — push hard for the winner, high press.")
+
     # Restart situations: act before the opponent settles
     if isinstance(play_mode, str) and play_mode not in ("OPEN_PLAY", "", "0"):
         lines.append(f"RESTART ({play_mode}): ball is in play from a set piece — act FAST, don't stand still.")
+
+    # Orchestration without messaging: every agent derives the same assignment
+    # from the same state, so exactly one player goes to the ball and the rest
+    # keep their shape (no more five players chasing one ball).
+    if me and possession_id is None and my_team:
+        chaser = min(my_team, key=lambda p: dist(p.get("position", {}) or {}, ball_pos))
+        if chaser is me:
+            lines.append("ASSIGNMENT: you are your team's CLOSEST player to the free ball — chase and win it NOW.")
+        else:
+            lines.append(f"ASSIGNMENT: teammate P{_player_idx(chaser)} is closest to the free ball — do NOT chase it; hold your position/run.")
+    elif me and possession_id is not None and not we_have_ball and my_team:
+        presser = min(my_team, key=lambda p: dist(p.get("position", {}) or {}, ball_pos))
+        if presser is me:
+            lines.append("ASSIGNMENT: you are the designated PRESSER — attack the ball carrier now.")
+        else:
+            lines.append(f"ASSIGNMENT: P{_player_idx(presser)} presses the carrier — you cut a passing lane / mark a runner instead of chasing.")
 
     lines.append("")
 

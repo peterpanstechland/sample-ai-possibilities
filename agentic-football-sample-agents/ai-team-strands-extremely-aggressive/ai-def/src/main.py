@@ -6,6 +6,7 @@ Uses Strands SDK + Amazon Nova Micro (fastest model, latency-optimized).
 import os, sys; sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib")); sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "lib"))
 from _bootstrap import setup_lib_path; setup_lib_path(__file__)
 
+from dataclasses import replace
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from agent_base import create_agent, create_invoke_handler
 from fallback import build_fallback, DEF_CONFIG
@@ -18,28 +19,46 @@ POSITION_LABEL = "DEF"
 
 # --- System Prompt ---
 
-SYSTEM_PROMPT = f"""Ultra-aggressive attacking defender AI. You control ONLY player {MY_PLAYER_ID} (DEF) in 5v5 soccer. Each tick: read state, reply exactly ONE command.
+SYSTEM_PROMPT = f"""Ultra-aggressive attacking defender AI (libero). You control ONLY player {MY_PLAYER_ID} (DEF) in 5v5 soccer. Each tick: read state, reply ONE command.
 
-RULE #1 — SHOOT, NEVER DRIBBLE: if hasBall=True and within 45 of opponent goal, reply SHOOT aim CENTER power 1.0 immediately. Never dribble to the byline.
+RULE #1 — YES, YOU CAN SHOOT. Every position shoots when the lane is clear.
+- "LANE CLEAR (X)": SHOOT aim X power 1.0 (even from range).
+- "POINT-BLANK": SHOOT aim CENTER power 1.0.
+- "LANE BLOCKED all corners — first MOVE_TO (x,y)": reply that MOVE_TO (side-step), shoot next tick.
+- "LANE BLOCKED all corners — PASS": PASS type THROUGH to a forward (3 or 4). Never PASS back to GK.
 
 TACTICS (priority order):
-1. hasBall=True within 45 of opponent goal: SHOOT aim CENTER power 1.0. Otherwise PASS type THROUGH forward to player 3 or 4. Never pass back.
-2. Opponent has ball: PRESS_BALL intensity 1.0, INTERCEPT aggressive true, or SLIDE_TACKLE if very close.
-3. Team has ball: MOVE_TO opponent half, sprint true — join every attack.
-4. Only defend deep if ball is in your defensive third.
+1. hasBall=True and distOppGoal<=45: obey the TACTICS Shot line.
+2. hasBall=True elsewhere: PASS type THROUGH to player 3 or 4 (use TACTICS "Best passes" if shown). Never dribble backward, never pass to GK.
+3. Opponent has ball AND ASSIGNMENT says you press: PRESS_BALL intensity 1.0 or SLIDE_TACKLE if within 2.
+4. Opponent has ball AND ASSIGNMENT says a teammate presses: MARK the opponent's most dangerous player (see TACTICS "Top threat") tightness TIGHT. Cut passing lanes rather than chasing.
+5. Team has ball: MOVE_TO just past the halfway line (x ≈ 8 toward opp goal, y = 0), sprint true — you are the safety valve for clearances.
+6. Free ball AND ASSIGNMENT says you are closest: MOVE_TO the ball, sprint true.
+7. Only sit deep (defensive third) if ball is in your defensive third AND opponent has it.
+
+RESPECT ASSIGNMENT lines — do NOT press when a teammate is designated presser; MARK instead.
 
 COMMANDS: MOVE_TO(target_x,target_y,sprint) | PASS(target_player_id,type=GROUND|AERIAL|THROUGH) | SHOOT(aim_location=TL|TR|BL|BR|CENTER,power) | PRESS_BALL(intensity) | INTERCEPT(aggressive) | SLIDE_TACKLE(target_player_id,sprint,distance) | MARK(target_player_id,tightness=LOOSE|TIGHT) | SET_STANCE(stance 0-2)
-PASS/SHOOT require having the ball.
 
-FIELD: kickoff spot (0,0) at midfield. x: -55 left goal line, +55 right goal line. y: +35 top, -35 bottom. Team 0 defends x=-55 and attacks +x; Team 1 defends x=+55 and attacks -x.
+FIELD: kickoff (0,0). x: -55 own-goal-line to +55 opp-goal-line. y: -35 bottom to +35 top. Team 0 defends x=-55 and attacks +x; Team 1 defends x=+55 and attacks -x.
 
 Reply ONLY the JSON array, no other text:
-[{{"commandType":"MOVE_TO","playerId":{MY_PLAYER_ID},"parameters":{{"target_x":30,"target_y":0,"sprint":true}},"duration":0}}]"""
+[{{"commandType":"MOVE_TO","playerId":{MY_PLAYER_ID},"parameters":{{"target_x":10,"target_y":0,"sprint":true}},"duration":0}}]"""
 
 
 # --- Fallback ---
-
-fallback_commands = build_fallback(DEF_CONFIG)
+# Aggressive DEF: possession action becomes SHOOT_OR_PASS so a lucky clearance
+# from range still ends in a shot; press only when designated; MARK when off.
+AGG_DEF_CONFIG = replace(
+    DEF_CONFIG,
+    possession_action="SHOOT_OR_PASS",
+    press_only_if_designated=True,
+    press_distance=10.0,
+    off_ball_action="MARK",
+    default_x_factor=0.2, default_x_ref="my_goal",  # sit closer to halfway when off ball
+    default_y=0,
+)
+fallback_commands = build_fallback(AGG_DEF_CONFIG)
 
 
 # --- Wire it up ---
@@ -47,7 +66,7 @@ fallback_commands = build_fallback(DEF_CONFIG)
 agent = create_agent(SYSTEM_PROMPT, model_id="us.amazon.nova-micro-v1:0")
 create_invoke_handler(
     app, agent, MY_PLAYER_ID, POSITION_LABEL, fallback_commands,
-    fallback_cfg=DEF_CONFIG,
+    fallback_cfg=AGG_DEF_CONFIG,
 )
 
 if __name__ == "__main__":

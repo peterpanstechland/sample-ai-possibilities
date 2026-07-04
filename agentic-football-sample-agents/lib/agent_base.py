@@ -8,7 +8,7 @@ from strands.models import BedrockModel
 
 from parsing import parse_commands
 from pattern_tracker import PatternTracker
-from state import summarize_state
+from state import summarize_state, possession_context
 from tactics import tactics_report
 from fallback import FallbackConfig, build_last_resort
 
@@ -47,13 +47,17 @@ def create_invoke_handler(
     last_resort = build_last_resort(fallback_cfg, my_player_id)
     tracker = PatternTracker()
 
-    def log_decision(source, commands, latency_ms, game_state, prompt_chars):
+    def log_decision(source, commands, latency_ms, game_state, prompt_chars,
+                     effective_pid=my_player_id, team_id=0):
         """One structured line per tick for CloudWatch Logs Insights.
 
         Fields: pos, tick, t (game seconds), source (llm/fallback/error-fallback/
-        last-resort), cmd, latency_ms (LLM call only), prompt_chars.
+        last-resort), cmd, latency_ms (LLM call only), prompt_chars,
+        hb (had ball 0/1), dg (dist to opponent goal) — the last two let the
+        analyzer measure shot discipline on real chances.
         """
         try:
+            hb, dg = possession_context(game_state, team_id, effective_pid)
             log.info("DECISION " + json.dumps({
                 "pos": position_label,
                 "tick": game_state.get("tick"),
@@ -62,6 +66,8 @@ def create_invoke_handler(
                 "cmd": commands[0].get("commandType") if commands else None,
                 "latency_ms": latency_ms,
                 "prompt_chars": prompt_chars,
+                "hb": hb,
+                "dg": dg,
             }, separators=(",", ":")))
         except Exception:
             pass
@@ -115,13 +121,15 @@ def create_invoke_handler(
             if commands:
                 log.info(f"LLM returned {len(commands)} commands: "
                          f"{[c.get('commandType') for c in commands]}")
-                log_decision("llm", commands, llm_ms, game_state, len(state_summary))
+                log_decision("llm", commands, llm_ms, game_state, len(state_summary),
+                             effective_pid, team_id)
                 yield json.dumps(commands)
             else:
                 log.warn(f"LLM parse failed, using fallback. Response: {response_text[:200]}")
                 commands = fallback_fn(game_state, team_id, effective_pid)
                 log.info(f"Fallback returned {len(commands)} commands")
-                log_decision("parse-fallback", commands, llm_ms, game_state, len(state_summary))
+                log_decision("parse-fallback", commands, llm_ms, game_state, len(state_summary),
+                             effective_pid, team_id)
                 yield json.dumps(commands)
 
         except Exception as e:
@@ -137,7 +145,8 @@ def create_invoke_handler(
                     effective_pid,
                 )
                 log_decision("error-fallback", commands, None,
-                             prompt_data.get("gameState", {}), None)
+                             prompt_data.get("gameState", {}), None,
+                             effective_pid, team_id)
                 yield json.dumps(commands)
             except Exception:
                 cmd = dict(last_resort)
