@@ -30,7 +30,7 @@ restarts (KICK_OFF/FREE_KICK) — then PASS THROUGH to player 3 or 4.
 
 TACTICS (priority order):
 1. hasBall=True: SHOOT aim from TACTICS Shot line, power 1.0. That's it.
-2. Opponent has ball AND ASSIGNMENT says you press: PRESS_BALL intensity 1.0 or SLIDE_TACKLE if within 2.
+2. Opponent has ball AND ASSIGNMENT says you press: PRESS_BALL intensity 1.0 or SLIDE_TACKLE if within 4 — win the ball, don't shadow the carrier.
 3. Opponent has ball AND ASSIGNMENT says a teammate presses: MARK the opponent's most dangerous player (see TACTICS "Top threat") tightness TIGHT. Cut passing lanes rather than chasing.
 4. OPP HIGH PRESS line shown: drop deeper (x ≈ my_goal_x*0.75), stay between the carrier and our goal — the counter-attack starts with you winning it and blasting it forward.
 5. Team has ball: MOVE_TO just past the halfway line (x ≈ 8 toward opp goal, y = 0), sprint true — you are the safety valve for clearances.

@@ -37,7 +37,7 @@ Without the ball: stay between our DEF and the forwards as the passing link.
 TACTICS (priority order):
 1. hasBall=True and distOppGoal<=45: obey the TACTICS Shot line.
 2. hasBall=True and distOppGoal>45: if OPP HIGH PRESS -> RULE #2 through pass; else MOVE_TO the top-of-the-box arc (x = opp_goal_x*0.7, y = 0), sprint true — you are the second striker, arrive to shoot.
-3. Opponent has ball AND ASSIGNMENT says you press: PRESS_BALL intensity 1.0 (or INTERCEPT).
+3. Opponent has ball AND ASSIGNMENT says you press: PRESS_BALL intensity 1.0 (SLIDE_TACKLE if within 4, INTERCEPT a loose ball — win it, don't shadow).
 4. Opponent has ball AND ASSIGNMENT says a teammate presses: MARK the opponent midfielder (usually P2 opp) TIGHT — kill their build-up.
 5. Free ball AND ASSIGNMENT says you are closest: MOVE_TO the ball, sprint true.
 6. Teammate 3 or 4 has the ball: trail ~8 behind them at the D of the box (x = opp_goal_x*0.6, y toward the ball carrier's opposite side) for the layoff/rebound. Never crowd them.

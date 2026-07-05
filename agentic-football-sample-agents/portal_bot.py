@@ -419,12 +419,18 @@ class LiveCoach:
     all five LLMs at once.
 
     The portal only accepts preset instructions (free text is rejected with
-    400), so situations map onto the 6 presets. Event-driven (react to goals
-    immediately) + state-driven (score/time phase), with a cooldown and
-    same-situation dedupe so the chat isn't flooded.
+    400), so situations map onto the 6 presets. Event-driven (react to goals)
+    + state-driven (score/time phase), with a cooldown and same-situation
+    dedupe so the chat isn't flooded.
+
+    Goal-triggered orders are QUEUED, not sent at the goal moment: the goal
+    replay + kickoff cutscene swallow anything injected right then
+    (user-observed). The order is released once the game clock has moved past
+    the goal (play resumed) or after two polls as a fallback.
     """
 
     MATCH_LEN = 120  # gameTime runs 0..120 in portal matches
+    RESUME_DELAY_S = 8  # in-game seconds after a goal before orders land
     PRESETS = ("press_high", "play_possession", "shoot_on_sight",
                "slow_the_tempo", "increase_the_tempo", "go_all_out_attack")
 
@@ -441,6 +447,9 @@ class LiveCoach:
         self.opp = 0
         self.game_time = 0
         self._opp_threats: list[int] = []  # gameTimes of opp shots/pressing
+        self._pending: tuple[str, str] | None = None  # queued goal reaction
+        self._pending_at = 0   # game_time of the goal that queued it
+        self._pending_polls = 0
 
     # --- situation -> preset instruction --------------------------------------
     def _decide(self, scored: bool, conceded: bool) -> tuple[str, str] | None:
@@ -491,13 +500,31 @@ class LiveCoach:
                 self._opp_threats.append(t)
 
         decision = self._decide(scored, conceded)
+        if decision is not None and decision[0] in ("conceded", "scored"):
+            # Goal reaction: hold it until the replay/kickoff cutscene passes
+            # so the instruction is actually seen (and acted on) in live play.
+            self._pending = decision
+            self._pending_at = self.game_time
+            self._pending_polls = 0
+            print(f"  COACH queued [{self.game_time}s {self.my}-{self.opp}] "
+                  f"{decision[0]} -> {decision[1]} (waiting for kickoff)")
+            return
+        if self._pending is not None:
+            self._pending_polls += 1
+            if (self.game_time >= self._pending_at + self.RESUME_DELAY_S
+                    or self._pending_polls >= 2):
+                key, preset = self._pending
+                self._pending = None
+                self._send(key, preset)
+            return  # a queued goal order outranks routine situation orders
         if decision is None:
             return
         key, preset = decision
-        urgent = key in ("conceded", "scored")  # goals bypass the cooldown
-        now = time.time()
-        if not urgent and now - self._last_sent_at < self.cooldown_s:
+        if time.time() - self._last_sent_at < self.cooldown_s:
             return
+        self._send(key, preset)
+
+    def _send(self, key: str, preset: str):
         if preset == self._last_key:
             return  # already the active order — repeating it adds nothing
         try:
@@ -506,7 +533,7 @@ class LiveCoach:
             if "in-progress" in str(e):
                 return  # final whistle beat us to it — benign race
             raise
-        self._last_sent_at, self._last_key = now, preset
+        self._last_sent_at, self._last_key = time.time(), preset
         print(f"  COACH [{self.game_time}s {self.my}-{self.opp}] {key} -> {preset}")
 
 

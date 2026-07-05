@@ -36,10 +36,10 @@ ball is coming: sprint onto it and SHOOT on sight. Do NOT come deep to defend.
 
 TACTICS (priority order):
 1. hasBall=True and distOppGoal<=45: obey the TACTICS Shot line (SHOOT or side-step MOVE_TO).
-2. hasBall=True and distOppGoal>45: MOVE_TO the RIGHT wing edge of the opponent box (x = opp_goal_x*0.75, y = 14), sprint true — DO NOT run down the center.
-3. Opponent has ball AND ASSIGNMENT says you are the presser: PRESS_BALL intensity 1.0 (or SLIDE_TACKLE if within 2).
+2. hasBall=True and distOppGoal>45: MOVE_TO the RIGHT wing edge of the opponent box (x = opp_goal_x*0.75, y = 14), sprint true — DO NOT run down the center, and NEVER dribble to the byline: stop at the box edge (|x|=44); no shot lane there = CUTBACK PASS type GROUND to the teammate at the penalty spot.
+3. Opponent has ball AND ASSIGNMENT says you are the presser: PRESS_BALL intensity 1.0 (SLIDE_TACKLE if within 4 — win the ball, don't shadow).
 4. Opponent has ball AND ASSIGNMENT says a teammate presses: MARK the nearest opponent forward (tightness TIGHT) — do NOT go press yourself; if OPP HIGH PRESS, hold your high wing spot instead (RULE #2).
-5. Teammate 3 has the ball: sprint to the FAR POST (x ≈ opp_goal_x - 6, y = 6) for the tap-in.
+5. Teammate 3 has the ball: sprint to the PENALTY SPOT (x ≈ opp_goal_x*0.76, y = 9) for the cutback/tap-in.
 6. Free ball AND ASSIGNMENT says you are closest: MOVE_TO the ball, sprint true.
 7. Else: MOVE_TO the right half-space between opponent DEF and MID (x = opp_goal_x*0.5, y = 14), sprint true.
 

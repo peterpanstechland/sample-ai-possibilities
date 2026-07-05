@@ -259,7 +259,7 @@ assert out[0]["commandType"] == "MARK" and out[0]["parameters"]["target_player_i
 out, tag = apply_overrides([{"commandType": "PRESS_BALL", "playerId": 4, "teamId": 0,
                              "parameters": {"intensity": 1.0}}], gs2, 0, 4, "FWD2", OV)
 assert tag == "support" and out[0]["commandType"] == "MOVE_TO", (tag, out)
-assert out[0]["parameters"]["target_x"] == 48, out  # far-post spot, not a chase
+assert out[0]["parameters"]["target_x"] == 42, out  # penalty-spot area, not a chase
 
 # J7: carrying out of range down the middle -> steered to the wing lane.
 gs11 = copy.deepcopy(GAME_STATE)
@@ -451,16 +451,16 @@ assert tag is None and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
 # make an advancing run or get sent to the wide support spots.
 # gs2: home P3 holds at (14,-5). FWD2 = P4 at (20,15), MID = P2 at (5,-8).
 
-# N1: FWD2 marks during our possession -> wide far-post support run (48, 11).
+# N1: FWD2 marks during our possession -> wide penalty-spot support run (42, 9).
 out, tag = apply_overrides(_mk_for(4, "MARK", target_player_id=1, tightness="TIGHT"),
                            gs2, 0, 4, "FWD2", OV)
 assert tag == "support" and out[0]["commandType"] == "MOVE_TO", (tag, out)
-assert out[0]["parameters"]["target_x"] == 48 and out[0]["parameters"]["target_y"] == 11.0, out
+assert out[0]["parameters"]["target_x"] == 42 and out[0]["parameters"]["target_y"] == 9.0, out
 
 # N2: FWD2 drifts BACKWARDS (target_x 5 < current 20) -> support run.
 out, tag = apply_overrides(_mk_for(4, "MOVE_TO", target_x=5, target_y=15, sprint=False),
                            gs2, 0, 4, "FWD2", OV)
-assert tag == "support" and out[0]["parameters"]["target_x"] == 48, (tag, out)
+assert tag == "support" and out[0]["parameters"]["target_x"] == 42, (tag, out)
 
 # N3: FWD2 makes a genuinely advancing run (40 > 20+2) -> the LLM's own idea
 # stands untouched.
@@ -479,6 +479,110 @@ assert out[0]["parameters"]["target_x"] == 33.0 and out[0]["parameters"]["target
 out, tag = apply_overrides(_mk_for(1, "MARK", target_player_id=1, tightness="TIGHT"),
                            gs2, 0, 1, "DEF", OV)
 assert tag is None and out[0]["commandType"] == "MARK", (tag, out)
+
+# --- Scenario O: iter-12 finishing + ball-winning package -------------------
+# User report: carriers overran to the byline / dribbled and shot into packed
+# boxes, defenders only ever marked, GK air-kicked loose balls in our box.
+
+# O1: in-range carrier at (38,0), every aim blocked by the defender at (44,0),
+# P4 open at (20,15) with a clear pass lane and open shot -> GROUND cutback.
+gsO = copy.deepcopy(GAME_STATE)
+gsO["ball"]["possessionAgentId"] = "agentId_3"
+gsO["ball"]["position"] = {"x": 38.0, "y": 0.0, "z": 0}
+posO_home = {"agentId_3": (38, 0), "agentId_4": (20, 15), "agentId_2": (5, -8)}
+posO_away = {"agentId_1": (44, 0)}
+for p in gsO["players"]:
+    if p["teamCode"] == "home" and p["agentId"] in posO_home:
+        x, y = posO_home[p["agentId"]]
+        p["position"] = {"x": x, "y": y}
+    elif p["teamCode"] == "away":
+        x, y = posO_away.get(p["agentId"], (50, -30))
+        p["position"] = {"x": x, "y": y}
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=50, target_y=0, sprint=True),
+                           gsO, 0, 3, "FWD1", OV)
+assert tag == "cutback" and out[0]["commandType"] == "PASS", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == 4, out
+assert out[0]["parameters"]["type"] == "GROUND", out
+
+# O2: same block but no open teammate (P4 out of range) -> enforced lateral
+# sidestep at dribble pace, never a carry into the wall.
+gsO2 = copy.deepcopy(gsO)
+for p in gsO2["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_4":
+        p["position"] = {"x": 10, "y": 20}
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=50, target_y=0, sprint=True),
+                           gsO2, 0, 3, "FWD1", OV)
+assert tag == "sidestep" and out[0]["commandType"] == "MOVE_TO", (tag, out)
+assert out[0]["parameters"]["sprint"] is False, out
+assert out[0]["parameters"]["target_y"] != 0, out
+
+# O3: out-of-range carry aimed at the byline (52) -> depth-capped at the box
+# edge (44); a far target keeps the sprint, a near one drops it.
+gsO3 = copy.deepcopy(GAME_STATE)
+gsO3["ball"]["possessionAgentId"] = "agentId_3"
+gsO3["ball"]["position"] = {"x": 2.0, "y": 14.0, "z": 0}
+for p in gsO3["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
+        p["position"] = {"x": 2, "y": 14}
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=52, target_y=14, sprint=True),
+                           gsO3, 0, 3, "FWD1", OV)
+assert tag == "cap" and out[0]["parameters"]["target_x"] == 44.0, (tag, out)
+assert out[0]["parameters"]["sprint"] is True, out
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=12, target_y=14, sprint=True),
+                           gsO3, 0, 3, "FWD1", OV)
+assert tag is None and out[0]["parameters"]["sprint"] is False, (tag, out)
+
+# O4: designated presser 2.2 from the carrier -> the shadowing becomes a slide.
+gsO4 = copy.deepcopy(gs)  # away P3 holds at (30,-12)
+for p in gsO4["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
+        p["position"] = {"x": 28, "y": -11}
+out, tag = apply_overrides(_mk("PRESS_BALL", intensity=1.0), gsO4, 0, 3, "FWD1", OV)
+assert tag == "tackle" and out[0]["commandType"] == "SLIDE_TACKLE", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == -1, out
+
+# O5: designated player, free ball 1.3 away -> INTERCEPT instead of a jog.
+gsO5 = copy.deepcopy(GAME_STATE)
+gsO5["ball"]["possessionAgentId"] = None
+gsO5["ball"]["isFree"] = True
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=15, target_y=-5, sprint=True),
+                           gsO5, 0, 3, "FWD1", OV)
+assert tag == "intercept" and out[0]["commandType"] == "INTERCEPT", (tag, out)
+
+# O6: GK phantom SHOOT with a loose ball 2.8 away -> smother it (INTERCEPT).
+gsO6 = copy.deepcopy(GAME_STATE)
+gsO6["ball"]["possessionAgentId"] = None
+gsO6["ball"]["isFree"] = True
+gsO6["ball"]["position"] = {"x": -48.0, "y": 2.0, "z": 0}
+out, tag = apply_overrides(_mk_for(0, "SHOOT", aim_location="CENTER", power=1.0),
+                           gsO6, 0, 0, "GK", BLAST)
+assert tag == "gk-smother" and out[0]["commandType"] == "INTERCEPT", (tag, out)
+
+# O7: GK phantom SHOOT while the opponent carries upfield -> back to the line,
+# covering the ball's y (clamped to the frame).
+out, tag = apply_overrides(_mk_for(0, "SHOOT", aim_location="CENTER", power=1.0),
+                           gs, 0, 0, "GK", BLAST)
+assert tag == "gk-cover" and out[0]["commandType"] == "MOVE_TO", (tag, out)
+assert out[0]["parameters"]["target_x"] == -49.5, out
+assert out[0]["parameters"]["target_y"] == -8.0, out
+
+# O8: build-from-back DEF, unpressed but every outlet lane has a body on it ->
+# carry up the wing (14 toward their goal) instead of the donation hoof.
+gsO8 = copy.deepcopy(GAME_STATE)
+gsO8["ball"]["possessionAgentId"] = "agentId_1"
+gsO8["ball"]["position"] = {"x": -12.0, "y": 0.0, "z": 0}
+posO8_away = {"agentId_1": (-1, -4), "agentId_2": (1, -2), "agentId_3": (4, 7)}
+for p in gsO8["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_1":
+        p["position"] = {"x": -12, "y": 0}
+    elif p["teamCode"] == "away" and p["agentId"] in posO8_away:
+        x, y = posO8_away[p["agentId"]]
+        p["position"] = {"x": x, "y": y}
+out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=0, type="GROUND"),
+                           gsO8, 0, 1, "DEF", BUILD)
+assert tag == "carry" and out[0]["commandType"] == "MOVE_TO", (tag, out)
+assert out[0]["parameters"]["target_x"] == 2.0, out
+assert out[0]["parameters"]["target_y"] == 10.0, out
 
 # --- Scenario L: tuning overlay (autopilot control surface) -----------------
 from tuning import apply_tuning, clamp, get as tuning_get
@@ -518,5 +622,6 @@ print("Scenario J (tactical overrides: forced shot / no-chase / anchor / support
 print("Scenario K (GK/DEF blast, long shot, counter outlet, phantom fix) — OK")
 print("Scenario M (build-from-back: outlet when safe, blast when pressed) — OK")
 print("Scenario N (attack support: FWD/MID stretch wide instead of marking) — OK")
+print("Scenario O (cutback/sidestep/carry-cap/tackle/intercept/GK smother) — OK")
 print("Scenario L (tuning.json overlay: merge, clamp, immutability) — OK")
 print("ALL LIB TESTS PASSED")

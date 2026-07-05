@@ -230,6 +230,10 @@ Parameter meanings:
   anchor_slack     how far a defensive MOVE_TO may drift from the anchor
   mark_radius      max distance to pick up a man to MARK
   wing_y           wing lane forwards are steered into when carrying centrally
+  tackle_dist      designated presser slide-tackles the carrier inside this
+  intercept_radius designated player INTERCEPTs a loose ball inside this
+  carry_cap_x      dribble-target depth cap at the box edge (smaller = the
+                   carrier stops and cuts back earlier, never the byline)
 """
 
 

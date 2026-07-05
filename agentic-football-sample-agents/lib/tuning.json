@@ -11,11 +11,12 @@
     "shoot_threshold": 47.0
   },
   "global": {
-    "blast_pressure_dist": 9.0,
+    "blast_pressure_dist": 8.0,
     "build_from_back": true,
-    "gk_out_dist": 15.0,
-    "longshot_max": 46.0,
-    "mark_radius": 26.0,
+    "gk_out_dist": 16.0,
+    "longshot_max": 45.0,
+    "mark_radius": 28.0,
+    "outlet_min_gain": 9.0,
     "press_bodies": 2
   }
 }

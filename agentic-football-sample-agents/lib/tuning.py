@@ -43,6 +43,9 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "anchor_slack": (8.0, 18.0),
     "mark_radius": (15.0, 30.0),
     "wing_y": (-18.0, 18.0),
+    "tackle_dist": (2.0, 6.0),
+    "intercept_radius": (6.0, 15.0),
+    "carry_cap_x": (38.0, 50.0),
 }
 
 _INT_KEYS = {"press_bodies"}

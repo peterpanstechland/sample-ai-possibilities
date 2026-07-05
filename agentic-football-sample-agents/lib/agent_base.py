@@ -8,7 +8,7 @@ from strands.models import BedrockModel
 
 from parsing import parse_commands
 from pattern_tracker import PatternTracker
-from state import summarize_state, possession_context
+from state import summarize_state, possession_context, _coach_orders
 from tactics import tactics_report
 from fallback import FallbackConfig, build_last_resort
 from overrides import OverrideConfig, apply_overrides
@@ -87,6 +87,10 @@ def create_invoke_handler(
             }
             if ov:
                 payload["ov"] = ov
+            if _coach_orders(game_state):
+                # Ground truth that live coach instructions reach the prompt
+                # (the user couldn't tell whether injection worked from the UI).
+                payload["co"] = 1
             log.info("DECISION " + json.dumps(payload, separators=(",", ":")))
         except Exception:
             pass

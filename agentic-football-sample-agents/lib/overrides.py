@@ -32,7 +32,17 @@ the match-deciding rules deterministic:
      MARK on the nearest passing option or a compact-line position;
   7. anchor clamp — defensive-phase MOVE_TO far off the role's ball-shifted
      compact line becomes a real defensive job (line drops deeper when the
-     opponent commits bodies forward).
+     opponent commits bodies forward);
+  8. cutback (iter-12) — in range with every shot lane blocked, the carrier
+     stops dribbling into the block: cut the ball back to a teammate with an
+     open shot, else take the computed lateral sidestep at dribble pace;
+  9. carry cap (iter-12) — dribble targets clamp at the box edge and sprint
+     drops near the target (~1s of state staleness made carriers overrun to
+     the byline, user-observed);
+ 10. ball-winning (iter-12, user: "defense only marks") — the designated
+     presser inside tackle range SLIDE_TACKLEs the carrier and INTERCEPTs
+     loose balls; the GK smothers loose balls in our box instead of phantom
+     kicking (15-17 SHOOTs/match with hb=0 in the last two losses).
 
 Only teams that pass an OverrideConfig into create_invoke_handler get this
 behaviour — other teams' pipelines are byte-for-byte unchanged.
@@ -43,7 +53,7 @@ from dataclasses import dataclass
 
 from state import (get_goal_positions, dist, _player_idx, _is_my_team,
                    resolve_holder, count_opponents_in_our_half)
-from tactics import _best_shot_aim
+from tactics import _best_shot_aim, _lane_blocked
 
 _CHASE_CMDS = ("PRESS_BALL", "INTERCEPT", "SLIDE_TACKLE")
 _NEEDS_BALL_CMDS = ("PASS", "SHOOT", "GK_DISTRIBUTE")
@@ -90,6 +100,15 @@ class OverrideConfig:
     wing_y: float = 0.0
     """Forwards only: carrying the ball out of range down the center (|y|<8)
     is steered to this wing lane. 0 disables."""
+    tackle_dist: float = 3.5
+    """Designated presser this close to the carrier slides instead of
+    shadowing forever."""
+    intercept_radius: float = 10.0
+    """Designated player (and the GK in its box) INTERCEPTs a loose ball
+    inside this radius instead of jogging at it."""
+    carry_cap_x: float = 44.0
+    """Dribble targets clamp to |x| <= this: past the box edge the shot angle
+    dies at the byline (stale-state overruns, user-observed)."""
 
 
 def _cmd(cmd_type: str, pid: int, tid: int, params: dict, duration: int = 0) -> dict:
@@ -127,15 +146,16 @@ def _anchor(position_label: str, team_id: int, ball_pos: dict,
 
 def _support_spot(position_label: str, team_id: int, ball_pos: dict) -> tuple[float, float]:
     """Where to run when a teammate has the ball (attack support).
-    Forwards split WIDE around the posts (iter-11b: ±11 instead of ±6) so the
-    box isn't one clump — stretching the keeper opens the shot lanes the
-    enforce-shot rule needs."""
+    Forwards split wide at PENALTY-SPOT depth (iter-12: 13 units off the goal
+    line instead of 7 — camping the byline left them behind the play and fed
+    the user-observed byline pile-ups); stretching the keeper while staying
+    attackable is what the cutback + enforce-shot rules need."""
     my_goal_x, opp_goal_x = get_goal_positions(team_id)
     dir_my = 1.0 if my_goal_x > 0 else -1.0
     if position_label == "FWD1":
-        return opp_goal_x + 7 * dir_my, -11.0
+        return opp_goal_x + 13 * dir_my, -9.0
     if position_label == "FWD2":
-        return opp_goal_x + 7 * dir_my, 11.0
+        return opp_goal_x + 13 * dir_my, 9.0
     if position_label == "MID":
         return opp_goal_x * 0.6, _between(-10.0, 10.0, ball_pos.get("y", 0) * 0.4)
     return -8 * dir_my, 0.0  # DEF: sit just past halfway as the safety valve
@@ -184,6 +204,31 @@ def _best_outlet(cfg, players, team_id, my_player_id, me_pos, opp_goal_x,
             continue
         if best_d is None or d < best_d:
             best_idx, best_d = idx, d
+    return best_idx
+
+
+def _cutback_mate(cfg, players, team_id, my_player_id, me_pos, opp_goal_x,
+                  opponents):
+    """Best cutback target: a MID/FWD teammate already in shooting range,
+    reachable through a clear pass lane, whose own shot lane is open — the
+    wide-carrier-to-penalty-spot ball that beats dribbling into the block."""
+    goal = {"x": opp_goal_x, "y": 0}
+    best_idx, best_perp = None, None
+    for p in players:
+        idx = _player_idx(p)
+        if not _is_my_team(p, team_id) or idx == my_player_id or idx not in (2, 3, 4):
+            continue
+        pos = p.get("position", {}) or {}
+        d_goal = dist(pos, goal)
+        if d_goal > cfg.shoot_threshold or dist(me_pos, pos) > 30:
+            continue
+        if not _pass_lane_clear(me_pos, pos, opponents, 4.0):
+            continue
+        _aim, _y, perp = _best_shot_aim(pos, opp_goal_x, opponents)
+        if perp < (1.5 if d_goal <= 25 else 2.5):
+            continue  # they'd be shooting into the same block
+        if best_perp is None or perp > best_perp:
+            best_idx, best_perp = idx, perp
     return best_idx
 
 
@@ -271,11 +316,32 @@ def apply_overrides(commands: list[dict], game_state: dict, team_id: int,
                 return [_cmd("PASS", my_player_id, team_id,
                              {"target_player_id": outlet,
                               "type": "AERIAL" if long_ball else "THROUGH"})], "build"
+            if not pressed and my_player_id != 0:
+                # Iter-12: unpressured DEF with every outlet lane closed
+                # carries up the wing instead of hoofing — 26-28 shots/match
+                # at 93-96% from 45+ were straight possession donations.
+                # The GK still clears (it cannot leave the goal to dribble).
+                return [_cmd("MOVE_TO", my_player_id, team_id,
+                             {"target_x": round(me_pos.get("x", 0) - 14 * dir_my, 1),
+                              "target_y": 10.0 if me_pos.get("y", 0) >= 0 else -10.0,
+                              "sprint": True})], "carry"
         aim, _, _ = _best_shot_aim(me_pos, opp_goal_x, opponents)
         return _force_shot(commands, cmd, ctype, params, my_player_id, team_id,
                            aim, "blast")
 
     if my_player_id == 0:
+        # Iter-12: GK phantom kicks were exempt from the phantom rule — 15-17
+        # SHOOTs/match with hb=0 meant the keeper air-kicked while the ball
+        # sat loose in our box. Smother what's close, cover the rest.
+        if (not i_have and ctype in _NEEDS_BALL_CMDS
+                and not _is_set_piece(game_state.get("playMode"))):
+            if holder is None and dist(me_pos, ball_pos) <= cfg.intercept_radius:
+                return [_cmd("INTERCEPT", my_player_id, team_id,
+                             {"aggressive": True}, duration=2)], "gk-smother"
+            return [_cmd("MOVE_TO", my_player_id, team_id,
+                         {"target_x": round(my_goal_x * 0.9, 1),
+                          "target_y": round(_between(-8.0, 8.0, ball_pos.get("y", 0)), 1),
+                          "sprint": True})], "gk-cover"
         return commands, None  # GK: nothing below applies (guards its box)
 
     # --- 1. I hold the ball (MID / FWDs) -------------------------------------
@@ -291,7 +357,24 @@ def apply_overrides(commands: list[dict], game_state: dict, team_id: int,
                 desired = aim if lane_clear else "CENTER"
                 return _force_shot(commands, cmd, ctype, params, my_player_id,
                                    team_id, desired, "shoot" if ctype != "SHOOT" else "aim")
-            return commands, None  # blocked in range: LLM may sidestep/pass
+            # Iter-12: blocked in range. Left to itself the LLM kept carrying
+            # (and firing) INTO the block — the user-observed byline runs and
+            # shots into crowds. A teammate with an open shot gets the
+            # cutback; otherwise take the computed sidestep at dribble pace.
+            mate = _cutback_mate(cfg, players, team_id, my_player_id, me_pos,
+                                 opp_goal_x, opponents)
+            if mate is not None:
+                return [_cmd("PASS", my_player_id, team_id,
+                             {"target_player_id": mate,
+                              "type": "GROUND"})], "cutback"
+            _blocked, y_off = _lane_blocked(me_pos, opp_goal_x, opponents,
+                                            lane_radius)
+            if y_off:
+                return [_cmd("MOVE_TO", my_player_id, team_id,
+                             {"target_x": round(me_pos.get("x", 0) - 2 * dir_my, 1),
+                              "target_y": round(me_pos.get("y", 0) + y_off, 1),
+                              "sprint": False})], "sidestep"
+            return commands, None  # fully boxed in: LLM's call (shield/recycle)
 
         # Out of range from here on.
         opp_gk = next((o for o in opponents if _player_idx(o) == 0), None)
@@ -323,14 +406,27 @@ def apply_overrides(commands: list[dict], game_state: dict, team_id: int,
                                  {"target_x": round(tx, 1), "target_y": ty,
                                   "sprint": True})], "counter"
 
-        # Carrying out of range down the middle -> steer to the wing lane
-        if cfg.wing_y and ctype == "MOVE_TO":
-            ty = params.get("target_y")
-            tx = params.get("target_x")
+        # Carrying out of range: steer center runs to the wing lane, cap the
+        # depth at the box edge, and drop sprint near the target (iter-12 —
+        # with ~1s of state staleness a sprinting carrier overshoots the spot
+        # and ends up on the byline).
+        if ctype == "MOVE_TO":
+            tx, ty = params.get("target_x"), params.get("target_y")
+            tag = None
             toward_opp = isinstance(tx, (int, float)) and (tx - me_pos.get("x", 0)) * -dir_my > 0
-            if isinstance(ty, (int, float)) and abs(ty) < 8 and toward_opp:
-                params["target_y"] = cfg.wing_y
-                return commands, "wing"
+            if cfg.wing_y and isinstance(ty, (int, float)) and abs(ty) < 8 and toward_opp:
+                ty = cfg.wing_y
+                params["target_y"] = ty
+                tag = "wing"
+            if isinstance(tx, (int, float)) and tx * -dir_my > cfg.carry_cap_x:
+                tx = cfg.carry_cap_x * -dir_my
+                params["target_x"] = tx
+                tag = tag or "cap"
+            if (params.get("sprint") and isinstance(tx, (int, float))
+                    and isinstance(ty, (int, float))
+                    and dist(me_pos, {"x": tx, "y": ty}) <= 12):
+                params["sprint"] = False
+            return commands, tag
         return commands, None
 
     # --- 2. Teammate holds it: commands that need the ball become support runs
@@ -374,7 +470,20 @@ def apply_overrides(commands: list[dict], game_state: dict, team_id: int,
                                 me_pos, ball_pos, opponents, holder, deep)], "phantom"
 
     if designated:
-        return commands, None  # the designated player may chase/press freely
+        # Iter-12 (user: "defense only marks, never tackles"): the presser
+        # finishes the job — inside tackle range the shadowing becomes a
+        # slide at the carrier; a loose ball inside intercept range is
+        # attacked with INTERCEPT instead of a jog (1-4 tackles and 0-2
+        # intercepts per match before this).
+        if opp_has and ctype != "SLIDE_TACKLE":
+            if dist(me_pos, holder.get("position", {}) or {}) <= cfg.tackle_dist:
+                return [_cmd("SLIDE_TACKLE", my_player_id, team_id,
+                             {"target_player_id": -1, "sprint": True})], "tackle"
+        elif holder is None and ctype != "INTERCEPT":
+            if dist(me_pos, ball_pos) <= cfg.intercept_radius:
+                return [_cmd("INTERCEPT", my_player_id, team_id,
+                             {"aggressive": True}, duration=2)], "intercept"
+        return commands, None  # otherwise the designated player hunts freely
 
     chasing = ctype in _CHASE_CMDS
     if not chasing and ctype == "MOVE_TO":
