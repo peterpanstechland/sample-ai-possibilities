@@ -477,6 +477,14 @@ python portal_bot.py match --bot aggressive --headed
 python portal_bot.py coach            # 挂到当前正在进行的比赛
 python portal_bot.py coach --wait     # 赛前开启：待命等开球，自动接管
 python portal_bot.py coach --forever  # 一直守场边，每场比赛自动接管
+
+# 直接连你自己正在用的浏览器（CDP attach，不另开无头浏览器）：
+#   1) 用调试端口启动 Chrome（先完全退出 Chrome，再运行）：
+#      chrome.exe --remote-debugging-port=9222 --user-data-dir="%LOCALAPPDATA%\Google\Chrome\User Data"
+#      Edge 同理：msedge.exe --remote-debugging-port=9222 --user-data-dir="%LOCALAPPDATA%\Microsoft\Edge\User Data"
+#   2) 在那个窗口登录门户，然后：
+python portal_bot.py coach --forever --cdp   # 默认连 http://localhost:9222
+python portal_bot.py status --cdp http://localhost:9222
 ```
 
 场边教练的局势 → 指令映射（门户只接受 6 个预设，自由文本会被 400 拒绝）：
@@ -500,7 +508,10 @@ python portal_bot.py coach --forever  # 一直守场边，每场比赛自动接�
 - 需要有效的 AWS 凭证（CloudWatch 查询在 Windows 侧、部署在 WSL 侧），过期时 autopilot 会明确报错停止而不是带病循环；
 - 回归测试 Scenario L 覆盖 tuning 叠加/钳制/不可变性；训练场（`training_ground.py`）同样叠加 tuning，本地模拟与线上行为一致。
 
-**关于「Playwright 会话和我浏览器的不一样」**：Playwright 用的是独立的 `.portal-profile/` Chromium 配置，和你日常浏览器（Chrome/Edge）的登录态天然隔离。但门户的鉴权本质就是 `Authorization: Bearer team:<队伍码>` —— 只要队伍码相同，两边就是**同一支队伍、同一批比赛记录**（记录存服务端，不跟着浏览器走）。所以不必去"找"浏览器那份 session，只要 `setup --team-code`（或设 `AAFC_TEAM_CODE`）把队伍码固定一次即可：`token()` 会在 localStorage 为空/被锁/换机器时回退到这个固定码，`ensure_login` 还会把它写回 SPA 的 localStorage，让无头 API 调用和有头观赛页用的是同一个身份。
+**关于「Playwright 会话和我浏览器的不一样」**：Playwright 默认用独立的 `.portal-profile/` Chromium 配置，和你日常浏览器（Chrome/Edge）的登录态天然隔离。有两种对齐方式：
+
+1. **固定队伍码（推荐，无需浏览器）**：门户的鉴权本质就是 `Authorization: Bearer team:<队伍码>` —— 只要队伍码相同，两边就是**同一支队伍、同一批比赛记录**（记录存服务端，不跟着浏览器走）。`setup --team-code`（或设 `AAFC_TEAM_CODE`）固定一次即可：`token()` 会在 localStorage 为空/被锁/换机器时回退到这个固定码，`ensure_login` 还会把它写回 SPA 的 localStorage。
+2. **直接连你自己的浏览器（`--cdp`）**：如果你想让脚本用的就是你正开着的那个浏览器 tab（同一份 cookie/localStorage/登录态），用调试端口启动 Chrome/Edge（`--remote-debugging-port=9222`），脚本通过 `connect_over_cdp` attach 上去，复用你真实浏览器里的门户会话。`--cdp` 模式下脚本**只 attach 不关闭**你的浏览器，也不会抢占你正在看的 tab（已在门户 origin 就不重新导航）。
 
 ---
 

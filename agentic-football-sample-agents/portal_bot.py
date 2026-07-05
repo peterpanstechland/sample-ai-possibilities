@@ -81,28 +81,61 @@ class PortalError(RuntimeError):
 class PortalBot:
     """One persistent-profile Chromium context around the player portal."""
 
-    def __init__(self, headed: bool = False, base_url: str = BASE_URL):
+    def __init__(self, headed: bool = False, base_url: str = BASE_URL,
+                 cdp_url: str | None = None):
         self.base_url = base_url
         self.headed = headed
+        self.cdp_url = cdp_url          # attach to a real browser over CDP
         self._pw = None
+        self._browser = None
         self._ctx = None
         self.page = None
 
     # --- lifecycle -----------------------------------------------------------
     def __enter__(self):
         self._pw = sync_playwright().start()
-        PROFILE_DIR.mkdir(exist_ok=True)
-        self._ctx = self._pw.chromium.launch_persistent_context(
-            str(PROFILE_DIR),
-            headless=not self.headed,
-            viewport={"width": 1440, "height": 900},
-        )
-        self.page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
+        if self.cdp_url:
+            self._attach_over_cdp()
+        else:
+            PROFILE_DIR.mkdir(exist_ok=True)
+            self._ctx = self._pw.chromium.launch_persistent_context(
+                str(PROFILE_DIR),
+                headless=not self.headed,
+                viewport={"width": 1440, "height": 900},
+            )
+            self.page = (self._ctx.pages[0] if self._ctx.pages
+                         else self._ctx.new_page())
         return self
+
+    def _attach_over_cdp(self):
+        """Connect to a Chrome/Edge already running with --remote-debugging-port.
+        Reuses the user's real profile: their portal login is right there."""
+        try:
+            self._browser = self._pw.chromium.connect_over_cdp(self.cdp_url)
+        except Exception as e:
+            raise PortalError(
+                f"Could not attach to a browser at {self.cdp_url}: {e}\n"
+                "Start Chrome/Edge with a debug port first, e.g.:\n"
+                '  chrome.exe --remote-debugging-port=9222 '
+                '--user-data-dir="%LOCALAPPDATA%\\Google\\Chrome\\User Data"\n'
+                "then log into the portal in that window.")
+        self._ctx = (self._browser.contexts[0] if self._browser.contexts
+                     else self._browser.new_context())
+        # Prefer a tab already on the portal; otherwise reuse/open one.
+        for pg in self._ctx.pages:
+            if BASE_URL.split("//")[-1] in (pg.url or ""):
+                self.page = pg
+                break
+        else:
+            self.page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
 
     def __exit__(self, *exc):
         try:
-            self._ctx.close()
+            if self.cdp_url:
+                if self._browser:      # detach only — never close the user's browser
+                    self._browser.close()
+            else:
+                self._ctx.close()
         finally:
             self._pw.stop()
 
@@ -141,11 +174,18 @@ class PortalBot:
         except Exception:
             pass  # best-effort; API calls already work off the pinned code
 
+    def _on_portal(self) -> bool:
+        return BASE_URL.split("//")[-1] in (self.page.url or "")
+
     def ensure_login(self, team_code: str | None = None,
                      interactive_wait_s: int = 300) -> dict:
         """Return my team dict; join with the team code first if needed."""
-        self.page.goto(self.base_url, wait_until="domcontentloaded")
-        self.page.wait_for_timeout(1500)
+        # When attached to the user's real browser, don't hijack a tab they're
+        # watching — only navigate if we're not already on the portal origin
+        # (localStorage is per-origin, so we must be on the portal to read it).
+        if not (self.cdp_url and self._on_portal()):
+            self.page.goto(self.base_url, wait_until="domcontentloaded")
+            self.page.wait_for_timeout(1500)
 
         team_code = _normalize_code(team_code)
 
@@ -450,6 +490,18 @@ class LiveCoach:
 
 # --- CLI ----------------------------------------------------------------------
 
+def _add_cdp_args(p):
+    p.add_argument("--cdp", nargs="?", const="http://localhost:9222",
+                   metavar="URL",
+                   help="attach to YOUR running browser over CDP "
+                        "(default http://localhost:9222). Start Chrome/Edge "
+                        "with --remote-debugging-port=9222 first.")
+
+
+def _cdp_url(args) -> str | None:
+    return getattr(args, "cdp", None)
+
+
 def cmd_setup(args):
     code = _normalize_code(args.team_code)
     if code:  # pin it so every future run reuses this exact team identity
@@ -466,7 +518,7 @@ def cmd_setup(args):
 
 
 def cmd_status(args):
-    with PortalBot(headed=args.headed) as bot:
+    with PortalBot(headed=args.headed, cdp_url=_cdp_url(args)) as bot:
         team = bot.ensure_login()
         print(f"Team: {team.get('team_name') or team.get('name')} "
               f"(team_id={team['team_id']})")
@@ -495,9 +547,13 @@ def cmd_report(args):
 def cmd_coach(args):
     """Attach the situational LiveCoach to a running match. Start it BEFORE
     kickoff with --wait: it stands by and takes over the moment a match goes
-    live. --forever keeps coaching every subsequent match."""
+    live. --forever keeps coaching every subsequent match. --cdp attaches to
+    your own already-open browser instead of the bot's profile."""
     wait = args.wait or args.forever
-    with PortalBot(headed=args.headed) as bot:
+    cdp = _cdp_url(args)
+    with PortalBot(headed=args.headed, cdp_url=cdp) as bot:
+        if cdp:
+            print(f"attached to your browser at {cdp}")
         team = bot.ensure_login()
         team_id = team["team_id"]
         wins = losses = 0
@@ -581,6 +637,7 @@ def main():
 
     p = sub.add_parser("status", help="session + recent matches")
     p.add_argument("--headed", action="store_true")
+    _add_cdp_args(p)
     p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("match", help="play one practice match vs a bot")
@@ -608,6 +665,7 @@ def main():
                    help="min seconds between non-urgent orders")
     p.add_argument("--timeout", type=int, default=1500)
     p.add_argument("--headed", action="store_true")
+    _add_cdp_args(p)
     p.set_defaults(fn=cmd_coach)
 
     args = ap.parse_args()
