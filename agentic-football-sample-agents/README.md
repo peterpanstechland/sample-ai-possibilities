@@ -471,6 +471,11 @@ python autopilot.py --llm-advisor
 
 # 手动打一场看结果（退出码 0=赢）；--no-live-coach 关闭场边教练
 python portal_bot.py match --bot aggressive --headed
+
+# 场边教练单独使用（锦标赛/浏览器里手动开的比赛都适用）：
+python portal_bot.py coach            # 挂到当前正在进行的比赛
+python portal_bot.py coach --wait     # 赛前开启：待命等开球，自动接管
+python portal_bot.py coach --forever  # 一直守场边，每场比赛自动接管
 ```
 
 场边教练的局势 → 指令映射（门户只接受 6 个预设，自由文本会被 400 拒绝）：

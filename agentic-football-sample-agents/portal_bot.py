@@ -432,27 +432,48 @@ def cmd_report(args):
 
 
 def cmd_coach(args):
-    """Attach the situational LiveCoach to an already-running match
-    (tournament or practice) and shout until the final whistle."""
+    """Attach the situational LiveCoach to a running match. Start it BEFORE
+    kickoff with --wait: it stands by and takes over the moment a match goes
+    live. --forever keeps coaching every subsequent match."""
+    wait = args.wait or args.forever
     with PortalBot(headed=args.headed) as bot:
         team = bot.ensure_login()
         team_id = team["team_id"]
-        if args.match:
-            m = bot._norm_match(bot.api("GET", f"/matches/{args.match}"))
-        else:
+        wins = losses = 0
+        seen: set[str] = set()  # don't re-coach a match the list API still shows live
+
+        def next_live():
             m = bot.find_live_match(team_id)
-            if m is None:
-                print("No live match found for our team — nothing to coach.")
-                sys.exit(2)
-        print(f"Coaching {m['home_name']} vs {m['away_name']} "
-              f"(match {m['id']}, status {m['status']})...")
-        coach = LiveCoach(bot, m["id"], team_id, cooldown_s=args.cooldown)
-        result = bot.wait_for_result(m["id"], team_id, timeout_s=args.timeout,
-                                     coach=coach)
-        result["coach_final"] = {"my": coach.my, "opp": coach.opp,
-                                 "last_order": coach._last_key}
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-        sys.exit(0 if result.get("won") else 1)
+            return None if (m and m["id"] in seen) else m
+
+        while True:
+            if args.match:
+                m = bot._norm_match(bot.api("GET", f"/matches/{args.match}"))
+            else:
+                m = next_live()
+                if m is None:
+                    if not wait:
+                        print("No live match found — start with --wait to "
+                              "stand by for kickoff.")
+                        sys.exit(2)
+                    print("standby: waiting for kickoff (Ctrl+C to stop)...")
+                    while m is None:
+                        time.sleep(10)
+                        m = next_live()
+            seen.add(m["id"])
+            print(f"Coaching {m['home_name']} vs {m['away_name']} "
+                  f"(match {m['id']}, status {m['status']})...")
+            coach = LiveCoach(bot, m["id"], team_id, cooldown_s=args.cooldown)
+            result = bot.wait_for_result(m["id"], team_id,
+                                         timeout_s=args.timeout, coach=coach)
+            result["coach_final"] = {"my": coach.my, "opp": coach.opp,
+                                     "last_order": coach._last_key}
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            if not args.forever or args.match:
+                sys.exit(0 if result.get("won") else 1)
+            wins, losses = wins + bool(result.get("won")), \
+                losses + (not result.get("won"))
+            print(f"— record this session: {wins}W {losses}L —")
 
 
 def play_one_match(bot_variant: str = "aggressive", headed: bool = False,
@@ -518,6 +539,10 @@ def main():
 
     p = sub.add_parser("coach", help="live-coach the current in-progress match")
     p.add_argument("--match", help="match id (default: newest live match)")
+    p.add_argument("--wait", action="store_true",
+                   help="start before the match: stand by until kickoff")
+    p.add_argument("--forever", action="store_true",
+                   help="keep standing by and coach every match (implies --wait)")
     p.add_argument("--cooldown", type=float, default=30.0,
                    help="min seconds between non-urgent orders")
     p.add_argument("--timeout", type=int, default=1500)
