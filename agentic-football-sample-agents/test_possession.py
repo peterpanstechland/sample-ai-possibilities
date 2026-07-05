@@ -394,7 +394,10 @@ out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, metho
 assert tag == "build" and out[0]["commandType"] == "PASS", (tag, out)
 assert out[0]["parameters"]["target_player_id"] == 3, out
 
-# M2b: pressed AND every lane blocked -> only then the panic blast.
+# M2b: pressed AND every GROUND lane blocked, but a forward is upfield ->
+# iter-12b route-one AERIAL to the most advanced forward (home P4 at (20,15))
+# instead of the old blind blast. The pure-blast fallback (no forward upfield)
+# is covered by Scenario O9b.
 gsM2b = copy.deepcopy(gsM)
 posM2b = {"agentId_1": (-45, 2), "agentId_2": (-15, 7.5),
           "agentId_3": (-18, -2.5), "agentId_4": (-22.5, -4)}
@@ -404,10 +407,11 @@ for p in gsM2b["players"]:
         p["position"] = {"x": x, "y": y}
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM2b, 0, 0, "GK", BUILD)
-assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert tag == "launch" and out[0]["parameters"]["type"] == "AERIAL", (tag, out)
 
-# M3: unpressured but every lane to P2/P3/P4 has a body on it -> no outlet,
-# blast (clear it rather than force a pass into traffic).
+# M3: unpressured, every GROUND lane to P2/P3/P4 has a body on it, but a
+# forward is upfield -> iter-12b lofts the route-one ball rather than a blast
+# into traffic (home P4 at (20,15) is the target).
 gsM3 = copy.deepcopy(gsM)
 blockers = {"agentId_2": (-15, 7.5), "agentId_3": (-18, -2.5), "agentId_4": (-22.5, -4)}
 for p in gsM3["players"]:
@@ -416,7 +420,7 @@ for p in gsM3["players"]:
         p["position"] = {"x": x, "y": y}
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM3, 0, 0, "GK", BUILD)
-assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert tag == "launch" and out[0]["parameters"]["type"] == "AERIAL", (tag, out)
 
 # M4: build_from_back defaults OFF — the plain BLAST config still hoofs even
 # in the wide-open M1 fixture (iter-9 behavior preserved byte-for-byte).
@@ -583,6 +587,39 @@ out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=0, type="GROUND")
 assert tag == "carry" and out[0]["commandType"] == "MOVE_TO", (tag, out)
 assert out[0]["parameters"]["target_x"] == 2.0, out
 assert out[0]["parameters"]["target_y"] == 10.0, out
+
+# O9 (iter-12b): DEF PRESSED (opponent 3 from the ball) with every ground lane
+# shut -> route-one AERIAL to the most advanced forward, never a blind blast.
+# gsM2b already has a body on the GK and blockers on all outlet lanes; put a
+# presser right on the deep DEF and confirm the launch beats the blast.
+gsO9 = copy.deepcopy(GAME_STATE)
+gsO9["ball"]["possessionAgentId"] = "agentId_1"
+gsO9["ball"]["position"] = {"x": -30.0, "y": 0.0, "z": 0}
+posO9_home = {"agentId_1": (-30, 0), "agentId_2": (-20, 6),
+              "agentId_3": (12, -10), "agentId_4": (18, 12)}
+posO9_away = {"agentId_1": (-28, 1), "agentId_2": (-18, 6),
+              "agentId_3": (10, -9), "agentId_4": (16, 12)}
+for p in gsO9["players"]:
+    if p["teamCode"] == "home" and p["agentId"] in posO9_home:
+        x, y = posO9_home[p["agentId"]]
+        p["position"] = {"x": x, "y": y}
+    elif p["teamCode"] == "away" and p["agentId"] in posO9_away:
+        x, y = posO9_away[p["agentId"]]
+        p["position"] = {"x": x, "y": y}
+out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=0, type="GROUND"),
+                           gsO9, 0, 1, "DEF", BUILD)
+assert tag == "launch" and out[0]["commandType"] == "PASS", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == 4, out  # most advanced FWD
+assert out[0]["parameters"]["type"] == "AERIAL", out
+
+# O9b: same trap but NO forward is upfield of the presser -> only then blast.
+gsO9b = copy.deepcopy(gsO9)
+for p in gsO9b["players"]:
+    if p["teamCode"] == "home" and p["agentId"] in ("agentId_2", "agentId_3", "agentId_4"):
+        p["position"] = {"x": -34, "y": p["position"]["y"]}  # everyone behind the ball
+out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=0, type="GROUND"),
+                           gsO9b, 0, 1, "DEF", BUILD)
+assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
 
 # --- Scenario L: tuning overlay (autopilot control surface) -----------------
 from tuning import apply_tuning, clamp, get as tuning_get

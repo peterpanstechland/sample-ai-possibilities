@@ -42,7 +42,12 @@ the match-deciding rules deterministic:
  10. ball-winning (iter-12, user: "defense only marks") — the designated
      presser inside tackle range SLIDE_TACKLEs the carrier and INTERCEPTs
      loose balls; the GK smothers loose balls in our box instead of phantom
-     kicking (15-17 SHOOTs/match with hb=0 in the last two losses).
+     kicking (15-17 SHOOTs/match with hb=0 in the last two losses);
+ 11. route-one launch (iter-12b) — a pressed GK/DEF with every GROUND outlet
+     shut lofts an AERIAL to the most advanced forward instead of blasting to
+     nobody (validation match: far_shot_ratio 1.0, forwards 0 shots — the
+     press trapped us into 33 blind clearances and the strikers never touched
+     the ball in range).
 
 Only teams that pass an OverrideConfig into create_invoke_handler get this
 behaviour — other teams' pipelines are byte-for-byte unchanged.
@@ -207,6 +212,25 @@ def _best_outlet(cfg, players, team_id, my_player_id, me_pos, opp_goal_x,
     return best_idx
 
 
+def _most_advanced_mate(players, team_id, my_player_id, opp_goal_x, me_pos,
+                        min_gain):
+    """Highest MID/FWD meaningfully upfield of me — ignores lane clarity (this
+    is a lofted route-one ball over the press, not a threaded pass)."""
+    goal = {"x": opp_goal_x, "y": 0}
+    my_d = dist(me_pos, goal)
+    best_idx, best_d = None, None
+    for p in players:
+        idx = _player_idx(p)
+        if not _is_my_team(p, team_id) or idx == my_player_id or idx not in (2, 3, 4):
+            continue
+        d = dist(p.get("position", {}) or {}, goal)
+        if my_d - d < min_gain:
+            continue
+        if best_d is None or d < best_d:
+            best_idx, best_d = idx, d
+    return best_idx
+
+
 def _cutback_mate(cfg, players, team_id, my_player_id, me_pos, opp_goal_x,
                   opponents):
     """Best cutback target: a MID/FWD teammate already in shooting range,
@@ -325,6 +349,17 @@ def apply_overrides(commands: list[dict], game_state: dict, team_id: int,
                              {"target_x": round(me_pos.get("x", 0) - 14 * dir_my, 1),
                               "target_y": 10.0 if me_pos.get("y", 0) >= 0 else -10.0,
                               "sprint": True})], "carry"
+            # Iter-12b: pressed with every GROUND lane shut (the high-press
+            # trap that made all 3 losses far_shot_ratio ~1.0 and forwards
+            # 0 shots — DEF/GK just blasted the ball 85 units to nobody). A
+            # lofted route-one ball to the most advanced forward travels the
+            # same distance but is AIMED at our player: the press is bypassed
+            # and the forwards who never touched the ball get sprung.
+            launch = _most_advanced_mate(players, team_id, my_player_id,
+                                         opp_goal_x, me_pos, cfg.outlet_min_gain)
+            if launch is not None:
+                return [_cmd("PASS", my_player_id, team_id,
+                             {"target_player_id": launch, "type": "AERIAL"})], "launch"
         aim, _, _ = _best_shot_aim(me_pos, opp_goal_x, opponents)
         return _force_shot(commands, cmd, ctype, params, my_player_id, team_id,
                            aim, "blast")
