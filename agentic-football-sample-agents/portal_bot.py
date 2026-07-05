@@ -280,9 +280,20 @@ class PortalBot:
         except PortalError as e:
             return {"error": str(e)}
 
-    def recent_matches(self) -> list[dict]:
-        out = self.api("GET", "/matches")
-        return [self._norm_match(m) for m in out.get("items", [])]
+    def recent_matches(self, team_id: str | None = None) -> list[dict]:
+        path = (f"/matches?team_id={team_id}&limit=100" if team_id
+                else "/matches")
+        out = self.api("GET", path)
+        items = sorted(out.get("items", []),
+                       key=lambda m: m.get("created_at") or "", reverse=True)
+        return [self._norm_match(m) for m in items]
+
+    def find_live_match(self, team_id: str) -> dict | None:
+        """Newest starting/in-progress match involving our team, if any."""
+        for m in self.recent_matches(team_id):
+            if m["status"] in ("starting", "in_progress"):
+                return m
+        return None
 
 
 class LiveCoach:
@@ -398,7 +409,7 @@ def cmd_status(args):
         team = bot.ensure_login()
         print(f"Team: {team.get('team_name') or team.get('name')} "
               f"(team_id={team['team_id']})")
-        for m in bot.recent_matches()[:8]:
+        for m in bot.recent_matches(team["team_id"])[:8]:
             score = (f"{m['home_score']}-{m['away_score']}"
                      if m["home_score"] is not None else "—")
             print(f"  [{m['status']:>11}] {m['home_name']} vs {m['away_name']} "
@@ -418,6 +429,30 @@ def cmd_report(args):
         bot.ensure_login()
         print(json.dumps(bot.match_report(args.match_id), indent=2,
                          ensure_ascii=False))
+
+
+def cmd_coach(args):
+    """Attach the situational LiveCoach to an already-running match
+    (tournament or practice) and shout until the final whistle."""
+    with PortalBot(headed=args.headed) as bot:
+        team = bot.ensure_login()
+        team_id = team["team_id"]
+        if args.match:
+            m = bot._norm_match(bot.api("GET", f"/matches/{args.match}"))
+        else:
+            m = bot.find_live_match(team_id)
+            if m is None:
+                print("No live match found for our team — nothing to coach.")
+                sys.exit(2)
+        print(f"Coaching {m['home_name']} vs {m['away_name']} "
+              f"(match {m['id']}, status {m['status']})...")
+        coach = LiveCoach(bot, m["id"], team_id, cooldown_s=args.cooldown)
+        result = bot.wait_for_result(m["id"], team_id, timeout_s=args.timeout,
+                                     coach=coach)
+        result["coach_final"] = {"my": coach.my, "opp": coach.opp,
+                                 "last_order": coach._last_key}
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        sys.exit(0 if result.get("won") else 1)
 
 
 def play_one_match(bot_variant: str = "aggressive", headed: bool = False,
@@ -480,6 +515,14 @@ def main():
     p.add_argument("--match-id", required=True)
     p.add_argument("--headed", action="store_true")
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("coach", help="live-coach the current in-progress match")
+    p.add_argument("--match", help="match id (default: newest live match)")
+    p.add_argument("--cooldown", type=float, default=30.0,
+                   help="min seconds between non-urgent orders")
+    p.add_argument("--timeout", type=int, default=1500)
+    p.add_argument("--headed", action="store_true")
+    p.set_defaults(fn=cmd_coach)
 
     args = ap.parse_args()
     args.fn(args)
