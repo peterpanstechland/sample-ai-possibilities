@@ -9,6 +9,11 @@ the match-deciding rules deterministic:
   1. blast — GK/DEF possession is ALWAYS an instant full-power shot at the
      clearest part of the goal frame: clearance + shot in one, no range limit
      (skipped on set-piece play modes so restarts keep their mechanics);
+     with build_from_back (iter-11), an UNPRESSURED GK/DEF with a clear lane
+     to an advanced teammate plays the outlet pass instead — six matches of
+     KPI history showed 92-98% of our shots were 45+ hoofs and the team never
+     held the ball inside shooting range, so blind blasts just fed the
+     opponent's attack;
   2. shot enforcement — MID/FWD holding in range with a clear lane ALWAYS
      shoot (an LLM shot at a covered corner is re-aimed at the open one);
   3. long shot — 45-52 out with the opponent GK off his line and a clear
@@ -53,6 +58,12 @@ class OverrideConfig:
     always_blast: bool = False
     """GK/DEF: ANY open-play possession -> full-power shot at the clearest aim.
     Doubles as a clearance; no distance limit by design."""
+    build_from_back: bool = False
+    """Softens always_blast (iter-11, from match data): unpressured possession
+    with a clear advancing lane becomes an outlet pass that feeds the attack;
+    the blast remains the pressured / no-outlet fallback."""
+    blast_pressure_dist: float = 10.0
+    """An opponent within this of the carrier counts as pressure -> blast."""
     counter_attack: bool = True
     longshot_max: float = 52.0
     gk_out_dist: float = 12.0
@@ -229,6 +240,23 @@ def apply_overrides(commands: list[dict], game_state: dict, team_id: int,
     # --- 0. GK/DEF blast: any open-play possession is an instant shot -------
     # Set pieces keep their restart mechanics (GK_DISTRIBUTE on goal kicks etc).
     if cfg.always_blast and i_have and not _is_set_piece(game_state.get("playMode")):
+        if cfg.build_from_back and opponents:
+            # Match data (iters 6-10): ~95% of team shots were 45+ blasts and
+            # we never held the ball inside range — every hoof donated the
+            # ball straight back. When NOBODY is pressing and a clean lane to
+            # an advanced teammate exists, feed the attack instead.
+            pressed = min(dist(o.get("position", {}) or {}, me_pos)
+                          for o in opponents) <= cfg.blast_pressure_dist
+            if not pressed:
+                outlet = _best_outlet(cfg, players, team_id, my_player_id,
+                                      me_pos, opp_goal_x, opponents)
+                if outlet is not None:
+                    tgt = next(p for p in players
+                               if _player_idx(p) == outlet and _is_my_team(p, team_id))
+                    long_ball = dist(me_pos, tgt.get("position", {}) or {}) > 45
+                    return [_cmd("PASS", my_player_id, team_id,
+                                 {"target_player_id": outlet,
+                                  "type": "AERIAL" if long_ball else "THROUGH"})], "build"
         aim, _, _ = _best_shot_aim(me_pos, opp_goal_x, opponents)
         return _force_shot(commands, cmd, ctype, params, my_player_id, team_id,
                            aim, "blast")

@@ -351,6 +351,72 @@ out, tag = apply_overrides(_mk_for(3, "SHOOT", aim_location="CENTER", power=1.0)
                            gs, 0, 3, "FWD1", OV)
 assert tag == "phantom" and out[0]["commandType"] == "PRESS_BALL", (tag, out)
 
+# --- Scenario M: iter-11 build-from-back (data-driven blast softening) ------
+# Six matches of KPI history: far_shot_ratio 0.92-0.98, in_range_ticks = 0 —
+# blind GK/DEF hoofs donated possession all game. Unpressured + clear lane
+# now feeds the attack; pressured / no-outlet still blasts.
+BUILD = OverrideConfig(always_blast=True, build_from_back=True)
+
+# M1: GK holds deep, nobody pressing, clear lane to the most advanced forward
+# (home P4 at (20,15)) -> outlet pass, AERIAL because it crosses half a field.
+gsM = copy.deepcopy(GAME_STATE)
+gsM["ball"]["possessionAgentId"] = "agentId_0"
+gsM["ball"]["position"] = {"x": -50.0, "y": 0.0, "z": 0}
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsM, 0, 0, "GK", BUILD)
+assert tag == "build" and out[0]["commandType"] == "PASS", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == 4, out
+assert out[0]["parameters"]["type"] == "AERIAL", out
+
+# M2: same but an opponent is parked on the GK (within blast_pressure_dist)
+# -> pressure means no risky build-up, blast stays.
+gsM2 = copy.deepcopy(gsM)
+for p in gsM2["players"]:
+    if p["teamCode"] == "away" and p["agentId"] == "agentId_1":
+        p["position"] = {"x": -45, "y": 2}
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsM2, 0, 0, "GK", BUILD)
+assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+
+# M3: unpressured but every lane to P2/P3/P4 has a body on it -> no outlet,
+# blast (clear it rather than force a pass into traffic).
+gsM3 = copy.deepcopy(gsM)
+blockers = {"agentId_2": (-15, 7.5), "agentId_3": (-18, -2.5), "agentId_4": (-22.5, -4)}
+for p in gsM3["players"]:
+    if p["teamCode"] == "away" and p["agentId"] in blockers:
+        x, y = blockers[p["agentId"]]
+        p["position"] = {"x": x, "y": y}
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsM3, 0, 0, "GK", BUILD)
+assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+
+# M4: build_from_back defaults OFF — the plain BLAST config still hoofs even
+# in the wide-open M1 fixture (iter-9 behavior preserved byte-for-byte).
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsM, 0, 0, "GK", BLAST)
+assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+
+# M5: DEF builds too — holder at (-12,0), unpressured, lane to P4 open and
+# short enough for a THROUGH ball.
+gsM5 = copy.deepcopy(GAME_STATE)
+gsM5["ball"]["possessionAgentId"] = "agentId_1"
+gsM5["ball"]["position"] = {"x": -12.0, "y": 0.0, "z": 0}
+for p in gsM5["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_1":
+        p["position"] = {"x": -12, "y": 0}
+out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=0, type="GROUND"),
+                           gsM5, 0, 1, "DEF", BUILD)
+assert tag == "build" and out[0]["commandType"] == "PASS", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == 4, out
+assert out[0]["parameters"]["type"] == "THROUGH", out
+
+# M6: set pieces stay exempt — GOAL_KICK keeps GK_DISTRIBUTE mechanics.
+gsM6 = copy.deepcopy(gsM)
+gsM6["playMode"] = "GOAL_KICK"
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsM6, 0, 0, "GK", BUILD)
+assert tag is None and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
+
 # --- Scenario L: tuning overlay (autopilot control surface) -----------------
 from tuning import apply_tuning, clamp, get as tuning_get
 
@@ -370,6 +436,11 @@ assert apply_tuning(base_cfg, "DEF", {}) is base_cfg
 assert apply_tuning(None, "DEF", {"global": {"press_bodies": 2}}) is None
 assert clamp("press_bodies", 10) == 4 and clamp("gk_out_dist", 1.0) == 8.0
 assert tuning_get("longshot_max", 52.0, {"global": {"longshot_max": 100}}) == 58.0
+# booleans ride through tuning.json untouched; their numeric knobs clamp
+tunedM = apply_tuning(OverrideConfig(always_blast=True), "GK",
+                      {"global": {"build_from_back": True, "blast_pressure_dist": 99}})
+assert tunedM.build_from_back is True, tunedM
+assert tunedM.blast_pressure_dist == 16.0, tunedM.blast_pressure_dist
 
 print("Scenario A (away P3 holds): home view OPP / away view MY — OK")
 print("Scenario B (home P3 holds): hasBall=True + SHOOT NOW CENTER 1.0 — OK")
@@ -382,5 +453,6 @@ print("Scenario H (LANE CLEAR / BLOCKED shot check with sidestep hint) — OK")
 print("Scenario I (point-blank always shoots even with slight overlap) — OK")
 print("Scenario J (tactical overrides: forced shot / no-chase / anchor / support) — OK")
 print("Scenario K (GK/DEF blast, long shot, counter outlet, phantom fix) — OK")
+print("Scenario M (build-from-back: outlet when safe, blast when pressed) — OK")
 print("Scenario L (tuning.json overlay: merge, clamp, immutability) — OK")
 print("ALL LIB TESTS PASSED")

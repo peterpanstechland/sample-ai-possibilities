@@ -180,6 +180,9 @@ def rule_tuner(result: dict, kpis: dict, data: dict) -> tuple[dict, list[str]]:
         # and shorten the band where they are allowed.
         _bump(data, "global", "longshot_max", -2.0, notes)
         _bump(data, "global", "gk_out_dist", +1.0, notes)
+        # ...and let GK/DEF build from the back more often (a smaller pressure
+        # radius means fewer ticks count as pressed -> more outlet passes).
+        _bump(data, "global", "blast_pressure_dist", -1.0, notes)
 
     if my == 0 and team.get("shots", 0) < 8:
         # Toothless: start forcing shots from slightly further out.
@@ -218,6 +221,9 @@ Parameter meanings:
   gk_out_dist      how far the opp GK must be off his line to justify them
   outlet_min_gain  min territorial gain for a counter outlet pass (smaller =
                    easier escape passes under pressure)
+  blast_pressure_dist  GK/DEF build-from-back: an opponent inside this radius
+                   means 'pressed' -> blast instead of the outlet pass
+                   (smaller = braver build-up, bigger = safer hoofs)
   press_bodies     opponents in our half that flips us into counter mode
                    (smaller = go defensive earlier)
   chase_radius     ball-chase detection radius for non-designated players

@@ -1,7 +1,8 @@
 {
   "global": {
-    "gk_out_dist": 13.0,
-    "longshot_max": 50.0,
+    "build_from_back": true,
+    "gk_out_dist": 14.0,
+    "longshot_max": 48.0,
     "mark_radius": 24.0,
     "press_bodies": 2
   }

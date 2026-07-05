@@ -35,6 +35,7 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "shoot_threshold": (35.0, 50.0),
     "longshot_max": (45.0, 58.0),
     "gk_out_dist": (8.0, 18.0),
+    "blast_pressure_dist": (6.0, 16.0),
     "outlet_min_gain": (6.0, 20.0),
     "outlet_lane_radius": (3.0, 8.0),
     "press_bodies": (2, 4),

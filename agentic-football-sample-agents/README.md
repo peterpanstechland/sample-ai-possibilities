@@ -502,6 +502,8 @@ python portal_bot.py coach --forever --cdp
 
 调参器的规则沿用 iter-6→9 的手工经验：丢 3 球以上 → 提前进入反击姿态（`press_bodies -1`）+ 扩大盯人半径；远射占比 >40% → 收紧 `longshot_max`、提高 `gk_out_dist` 门槛；0 进球且射门 <8 → `shoot_threshold +2` 提前开火；控球率 <35% → 降低 `outlet_min_gain` 让解压传球更容易出脚；**赢球则冻结配置**。每一轮的 KPI、调参前后对照、部署结果都会追加到 `autopilot_history.jsonl`，这就是整个循环的「经验」。
 
+**Iter-11 — build from the back（由 6 场 KPI 历史数据驱动）**：历史数据里每一场都是同一个病灶——`far_shot_ratio` 0.92-0.98（射门几乎全是 45+ 的大脚）、`in_range_ticks = 0`（全队持球时从未进入过射程内）、GK 单场 25-32 次「射门」全是解围。无脑 blast 等于每次拿球都把球权还给对手，对弱队够赢、对进攻型强队就是被打穿的根源。改动：`build_from_back`（`tuning.json` 全局开启）——GK/DEF 拿球时**若无人逼抢（最近对手 > `blast_pressure_dist`，默认 10）且有干净的向前传球线路**，改为向最前场的空位队友送出弹进空间的 THROUGH/长距离 AERIAL 出球（`ov=build`），把球喂进进攻三区；**被逼抢或无人可传时照旧 blast**（iter-9 的用户规则保持为兜底）。规则调参器在远射比过高时会自动收小 `blast_pressure_dist`（更敢出球），回归测试 Scenario M 覆盖全部分支（安全出球 / 被压 blast / 无线路 blast / 默认关闭 / 定位球豁免）。
+
 注意：
 - 门户会话（`.portal-profile/`）和历史（`autopilot_history.jsonl`）已加入 `.gitignore`，不会提交；
 - 需要有效的 AWS 凭证（CloudWatch 查询在 Windows 侧、部署在 WSL 侧），过期时 autopilot 会明确报错停止而不是带病循环；
