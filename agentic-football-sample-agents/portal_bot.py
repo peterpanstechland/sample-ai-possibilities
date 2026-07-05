@@ -102,6 +102,10 @@ class PortalBot:
                 str(PROFILE_DIR),
                 headless=not self.headed,
                 viewport={"width": 1440, "height": 900},
+                # The portal's CDN edge sometimes serves a cert Chromium flags
+                # as ERR_CERT_COMMON_NAME_INVALID (Python/OpenSSL accepts the
+                # same host). Team-code auth, automation-only session.
+                ignore_https_errors=True,
             )
             self.page = (self._ctx.pages[0] if self._ctx.pages
                          else self._ctx.new_page())
