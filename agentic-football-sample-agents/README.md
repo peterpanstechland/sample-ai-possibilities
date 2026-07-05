@@ -457,8 +457,9 @@ iter-9 的回答是把「对方压上 → 我们打身后」变成代码级流�
 pip install playwright
 python -m playwright install chromium
 
-# 一次性：登录门户（弹出浏览器，输入 TEAM CODE 后会话自动保存）
+# 一次性：固定队伍码（无头即可，无需弹浏览器，会话可复现）
 python portal_bot.py setup --team-code <你的队伍码>
+# 或用环境变量固定（优先级高于保存的文件）：$Env:AAFC_TEAM_CODE="<你的队伍码>"
 
 # 三轮自动迭代（约赛 → 分析 → 调参 → 重部署）
 python autopilot.py --iterations 3
@@ -498,6 +499,8 @@ python portal_bot.py coach --forever  # 一直守场边，每场比赛自动接�
 - 门户会话（`.portal-profile/`）和历史（`autopilot_history.jsonl`）已加入 `.gitignore`，不会提交；
 - 需要有效的 AWS 凭证（CloudWatch 查询在 Windows 侧、部署在 WSL 侧），过期时 autopilot 会明确报错停止而不是带病循环；
 - 回归测试 Scenario L 覆盖 tuning 叠加/钳制/不可变性；训练场（`training_ground.py`）同样叠加 tuning，本地模拟与线上行为一致。
+
+**关于「Playwright 会话和我浏览器的不一样」**：Playwright 用的是独立的 `.portal-profile/` Chromium 配置，和你日常浏览器（Chrome/Edge）的登录态天然隔离。但门户的鉴权本质就是 `Authorization: Bearer team:<队伍码>` —— 只要队伍码相同，两边就是**同一支队伍、同一批比赛记录**（记录存服务端，不跟着浏览器走）。所以不必去"找"浏览器那份 session，只要 `setup --team-code`（或设 `AAFC_TEAM_CODE`）把队伍码固定一次即可：`token()` 会在 localStorage 为空/被锁/换机器时回退到这个固定码，`ensure_login` 还会把它写回 SPA 的 localStorage，让无头 API 调用和有头观赛页用的是同一个身份。
 
 ---
 

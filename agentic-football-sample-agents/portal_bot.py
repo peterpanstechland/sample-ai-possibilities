@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -42,6 +43,29 @@ API_BASE = "https://l3fmtx4zp0.execute-api.us-east-1.amazonaws.com/prod"
 PROFILE_DIR = Path(__file__).parent / ".portal-profile"
 TOKEN_KEY = "world_cup_team_token"
 SESSION_KEY = "world_cup_team_session"
+CODE_ENV = "AAFC_TEAM_CODE"            # pin the team code without a browser
+CODE_FILE = PROFILE_DIR / "team_code.txt"  # gitignored (inside .portal-profile)
+
+
+def _normalize_code(code: str | None) -> str | None:
+    """Accept 'team:XX1234', 'XX1234', or whitespace-padded input."""
+    if not code:
+        return None
+    code = code.strip()
+    if code.lower().startswith("team:"):
+        code = code[5:]
+    return code or None
+
+
+def _resolve_saved_code() -> str | None:
+    """The pinned team code: env var wins, else the saved file."""
+    code = _normalize_code(os.environ.get(CODE_ENV))
+    if code:
+        return code
+    try:
+        return _normalize_code(CODE_FILE.read_text(encoding="utf-8"))
+    except OSError:
+        return None
 
 BOTS = {
     "balanced": "The Benchmark FC",
@@ -87,6 +111,7 @@ class PortalBot:
         return self.page.evaluate("k => localStorage.getItem(k)", key)
 
     def token(self) -> str | None:
+        # 1) whatever the SPA stored in this profile's localStorage
         tok = self._local_storage(TOKEN_KEY)
         if tok:
             return tok
@@ -98,13 +123,41 @@ class PortalBot:
                     return f"team:{code}"
             except json.JSONDecodeError:
                 pass
+        # 2) fall back to the pinned team code (env/file) — the portal's auth
+        #    is just "Bearer team:<CODE>", so this is the same identity the
+        #    browser uses. Survives a wiped/locked profile or a fresh machine.
+        code = _resolve_saved_code()
+        if code:
+            return f"team:{code}"
         return None
+
+    def _seed_local_storage(self, code: str):
+        """Write the token into the SPA's localStorage so the viewer/coach UI
+        is authenticated as the same team the API calls use."""
+        try:
+            self.page.evaluate(
+                "([k, v]) => localStorage.setItem(k, v)",
+                [TOKEN_KEY, f"team:{code}"])
+        except Exception:
+            pass  # best-effort; API calls already work off the pinned code
 
     def ensure_login(self, team_code: str | None = None,
                      interactive_wait_s: int = 300) -> dict:
         """Return my team dict; join with the team code first if needed."""
         self.page.goto(self.base_url, wait_until="domcontentloaded")
         self.page.wait_for_timeout(1500)
+
+        team_code = _normalize_code(team_code)
+
+        # Explicit code, or one pinned via env/file, seeds the session directly.
+        pinned = team_code or _resolve_saved_code()
+        if not self._local_storage(TOKEN_KEY) and pinned:
+            self._seed_local_storage(pinned)
+            CODE_FILE.parent.mkdir(exist_ok=True)
+            try:
+                CODE_FILE.write_text(pinned, encoding="utf-8")
+            except OSError:
+                pass
 
         if not self.token() and team_code:
             box = self.page.get_by_placeholder("ENTER TEAM CODE")
@@ -125,7 +178,8 @@ class PortalBot:
 
         if not self.token():
             raise PortalError(
-                "No portal session. Run: python portal_bot.py setup --team-code <CODE>")
+                "No portal session. Run: python portal_bot.py setup --team-code "
+                f"<CODE>  (or set {CODE_ENV}=<CODE>)")
 
         team = self.api("GET", "/teams/mine")
         if isinstance(team.get("items"), list):  # endpoint wraps the team in items[]
@@ -397,11 +451,18 @@ class LiveCoach:
 # --- CLI ----------------------------------------------------------------------
 
 def cmd_setup(args):
-    with PortalBot(headed=True) as bot:
-        team = bot.ensure_login(args.team_code)
+    code = _normalize_code(args.team_code)
+    if code:  # pin it so every future run reuses this exact team identity
+        CODE_FILE.parent.mkdir(exist_ok=True)
+        CODE_FILE.write_text(code, encoding="utf-8")
+    # Headless works when we already have a code to pin; only pop a browser
+    # when we need the user to type the code in interactively.
+    with PortalBot(headed=not code) as bot:
+        team = bot.ensure_login(code)
         print(f"Logged in: {team.get('team_name') or team.get('name')} "
               f"(team_id={team['team_id']})")
-        print("Session saved to .portal-profile/ — headless runs will reuse it.")
+        print(f"Team code pinned to {CODE_FILE} and seeded into "
+              f".portal-profile/ — all runs reuse this session.")
 
 
 def cmd_status(args):
