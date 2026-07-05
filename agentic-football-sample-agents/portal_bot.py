@@ -181,9 +181,11 @@ class PortalBot:
         }
 
     def start_bot_match(self, team_id: str, bot: str,
-                        capacity_retries: int = 6,
+                        capacity_retries: int = 8,
                         capacity_wait_s: int = 60) -> str:
-        """POST /practice-matches; retries while the arena is at capacity."""
+        """POST /practice-matches; retries while the arena is at capacity or
+        while the previous practice slot is still being released (the backend
+        keeps the slot 'in progress' for a few minutes after full time)."""
         if bot not in BOTS:
             raise PortalError(f"Unknown bot '{bot}' (choose from {list(BOTS)})")
         for attempt in range(capacity_retries):
@@ -196,13 +198,15 @@ class PortalBot:
                 return match_id
             except PortalError as e:
                 s = str(e)
-                if "CAPACITY" in s.upper() or "429" in s or "409" in s:
-                    print(f"  arena busy ({attempt + 1}/{capacity_retries}), "
+                retryable = ("CAPACITY" in s.upper() or "429" in s or "409" in s
+                             or "practice match in progress" in s.lower())
+                if retryable:
+                    print(f"  slot busy ({attempt + 1}/{capacity_retries}), "
                           f"retrying in {capacity_wait_s}s...")
                     time.sleep(capacity_wait_s)
                     continue
                 raise
-        raise PortalError("Arena stayed at capacity — try again later.")
+        raise PortalError("Practice slot stayed busy — try again later.")
 
     def open_viewer(self, match_id: str):
         """Open the live viewer tab. Also nudges client-side match plumbing
