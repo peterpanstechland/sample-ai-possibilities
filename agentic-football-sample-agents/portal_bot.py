@@ -149,8 +149,9 @@ class PortalBot:
     def _local_storage(self, key: str) -> str | None:
         return self.page.evaluate("k => localStorage.getItem(k)", key)
 
-    def token(self) -> str | None:
-        # 1) whatever the SPA stored in this profile's localStorage
+    def _browser_token(self) -> str | None:
+        """Login state of THIS browser profile — localStorage only, no pinned
+        fallback. Used to tell whether the visible SPA is actually logged in."""
         tok = self._local_storage(TOKEN_KEY)
         if tok:
             return tok
@@ -162,23 +163,43 @@ class PortalBot:
                     return f"team:{code}"
             except json.JSONDecodeError:
                 pass
+        return None
+
+    def token(self) -> str | None:
+        # 1) whatever the SPA stored in this profile's localStorage; else
         # 2) fall back to the pinned team code (env/file) — the portal's auth
         #    is just "Bearer team:<CODE>", so this is the same identity the
         #    browser uses. Survives a wiped/locked profile or a fresh machine.
+        tok = self._browser_token()
+        if tok:
+            return tok
         code = _resolve_saved_code()
-        if code:
-            return f"team:{code}"
-        return None
+        return f"team:{code}" if code else None
 
-    def _seed_local_storage(self, code: str):
-        """Write the token into the SPA's localStorage so the viewer/coach UI
-        is authenticated as the same team the API calls use."""
+    def _login_with_code(self, code: str):
+        """Log the current browser in through the portal UI (type code + Join)
+        so the SPA stores its full session and the window shows the team — not
+        just the code-entry screen. Falls back to seeding localStorage."""
         try:
-            self.page.evaluate(
-                "([k, v]) => localStorage.setItem(k, v)",
-                [TOKEN_KEY, f"team:{code}"])
+            box = self.page.get_by_placeholder("ENTER TEAM CODE")
+            box.wait_for(timeout=8000)
+            box.fill(code)
+            self.page.get_by_role("button", name="Join").click()
+            try:
+                self.page.wait_for_url("**/player**", timeout=20_000)
+            except PWTimeout:
+                pass  # _browser_token() below is the source of truth
+            self.page.wait_for_timeout(1500)
         except Exception:
-            pass  # best-effort; API calls already work off the pinned code
+            # No visible login form — seed the token and reload so the SPA
+            # re-initializes from localStorage on next load.
+            try:
+                self.page.evaluate("([k, v]) => localStorage.setItem(k, v)",
+                                    [TOKEN_KEY, f"team:{code}"])
+                self.page.reload(wait_until="domcontentloaded")
+                self.page.wait_for_timeout(1500)
+            except Exception:
+                pass  # API calls still work off the pinned code
 
     def _on_portal(self) -> bool:
         return BASE_URL.split("//")[-1] in (self.page.url or "")
@@ -193,27 +214,18 @@ class PortalBot:
             self.page.goto(self.base_url, wait_until="domcontentloaded")
             self.page.wait_for_timeout(1500)
 
-        team_code = _normalize_code(team_code)
+        code = _normalize_code(team_code) or _resolve_saved_code()
 
-        # Explicit code, or one pinned via env/file, seeds the session directly.
-        pinned = team_code or _resolve_saved_code()
-        if not self._local_storage(TOKEN_KEY) and pinned:
-            self._seed_local_storage(pinned)
+        # If this browser profile isn't logged in yet but we have a code, log
+        # it in FOR REAL via the UI. (Checking _browser_token, not token(), so
+        # the pinned-code fallback doesn't mask an un-logged-in browser.)
+        if not self._browser_token() and code:
+            self._login_with_code(code)
             CODE_FILE.parent.mkdir(exist_ok=True)
             try:
-                CODE_FILE.write_text(pinned, encoding="utf-8")
+                CODE_FILE.write_text(code, encoding="utf-8")
             except OSError:
                 pass
-
-        if not self.token() and team_code:
-            box = self.page.get_by_placeholder("ENTER TEAM CODE")
-            box.fill(team_code)
-            self.page.get_by_role("button", name="Join").click()
-            try:
-                self.page.wait_for_url("**/player**", timeout=20_000)
-            except PWTimeout:
-                pass  # token check below is the source of truth
-            self.page.wait_for_timeout(1500)
 
         if not self.token() and self.headed:
             print(f"Waiting up to {interactive_wait_s}s — enter your TEAM CODE "
