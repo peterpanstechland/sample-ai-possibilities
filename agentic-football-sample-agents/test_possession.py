@@ -368,14 +368,29 @@ assert tag == "build" and out[0]["commandType"] == "PASS", (tag, out)
 assert out[0]["parameters"]["target_player_id"] == 4, out
 assert out[0]["parameters"]["type"] == "AERIAL", out
 
-# M2: same but an opponent is parked on the GK (within blast_pressure_dist)
-# -> pressure means no risky build-up, blast stays.
+# M2: an opponent parked on the GK (within blast_pressure_dist) -> iter-11c:
+# the pressed carrier STILL escapes via an outlet, but only through a 1.5x
+# wider corridor. P4's lane (7.07 from away P2) fails the stricter check,
+# P3's stays clean -> pass goes to P3 instead of P4.
 gsM2 = copy.deepcopy(gsM)
 for p in gsM2["players"]:
     if p["teamCode"] == "away" and p["agentId"] == "agentId_1":
         p["position"] = {"x": -45, "y": 2}
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM2, 0, 0, "GK", BUILD)
+assert tag == "build" and out[0]["commandType"] == "PASS", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == 3, out
+
+# M2b: pressed AND every lane blocked -> only then the panic blast.
+gsM2b = copy.deepcopy(gsM)
+posM2b = {"agentId_1": (-45, 2), "agentId_2": (-15, 7.5),
+          "agentId_3": (-18, -2.5), "agentId_4": (-22.5, -4)}
+for p in gsM2b["players"]:
+    if p["teamCode"] == "away" and p["agentId"] in posM2b:
+        x, y = posM2b[p["agentId"]]
+        p["position"] = {"x": x, "y": y}
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsM2b, 0, 0, "GK", BUILD)
 assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
 
 # M3: unpressured but every lane to P2/P3/P4 has a body on it -> no outlet,

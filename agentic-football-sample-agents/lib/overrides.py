@@ -64,11 +64,12 @@ class OverrideConfig:
     """GK/DEF: ANY open-play possession -> full-power shot at the clearest aim.
     Doubles as a clearance; no distance limit by design."""
     build_from_back: bool = False
-    """Softens always_blast (iter-11, from match data): unpressured possession
-    with a clear advancing lane becomes an outlet pass that feeds the attack;
-    the blast remains the pressured / no-outlet fallback."""
+    """Softens always_blast (iter-11, from match data): possession with a
+    clear advancing lane becomes an outlet pass that feeds the attack; the
+    blast remains the no-outlet fallback."""
     blast_pressure_dist: float = 10.0
-    """An opponent within this of the carrier counts as pressure -> blast."""
+    """An opponent within this of the carrier counts as pressure: the outlet
+    then needs a 1.5x wider clear lane before it beats the blast."""
     counter_attack: bool = True
     longshot_max: float = 52.0
     gk_out_dist: float = 12.0
@@ -163,11 +164,13 @@ def _pass_lane_clear(me_pos, tgt_pos, opponents, radius: float) -> bool:
 
 
 def _best_outlet(cfg, players, team_id, my_player_id, me_pos, opp_goal_x,
-                 opponents):
+                 opponents, lane_radius: float | None = None):
     """Most advanced teammate (MID/FWDs) meaningfully closer to goal with a
     clear pass lane. Returns player idx or None."""
     goal = {"x": opp_goal_x, "y": 0}
     my_d = dist(me_pos, goal)
+    if lane_radius is None:
+        lane_radius = cfg.outlet_lane_radius
     best_idx, best_d = None, None
     for p in players:
         idx = _player_idx(p)
@@ -177,7 +180,7 @@ def _best_outlet(cfg, players, team_id, my_player_id, me_pos, opp_goal_x,
         d = dist(pos, goal)
         if my_d - d < cfg.outlet_min_gain:
             continue
-        if not _pass_lane_clear(me_pos, pos, opponents, cfg.outlet_lane_radius):
+        if not _pass_lane_clear(me_pos, pos, opponents, lane_radius):
             continue
         if best_d is None or d < best_d:
             best_idx, best_d = idx, d
@@ -251,20 +254,23 @@ def apply_overrides(commands: list[dict], game_state: dict, team_id: int,
         if cfg.build_from_back and opponents:
             # Match data (iters 6-10): ~95% of team shots were 45+ blasts and
             # we never held the ball inside range — every hoof donated the
-            # ball straight back. When NOBODY is pressing and a clean lane to
-            # an advanced teammate exists, feed the attack instead.
+            # ball straight back. Iter-11c: 'pressed -> always blast' meant
+            # build-up NEVER happened against pressing teams (1-5 vs Total
+            # Attack, zero build ticks) — exactly when escaping the press
+            # matters most. A pressed carrier still plays the outlet, but only
+            # through a 1.5x wider safety corridor; no outlet -> blast.
             pressed = min(dist(o.get("position", {}) or {}, me_pos)
                           for o in opponents) <= cfg.blast_pressure_dist
-            if not pressed:
-                outlet = _best_outlet(cfg, players, team_id, my_player_id,
-                                      me_pos, opp_goal_x, opponents)
-                if outlet is not None:
-                    tgt = next(p for p in players
-                               if _player_idx(p) == outlet and _is_my_team(p, team_id))
-                    long_ball = dist(me_pos, tgt.get("position", {}) or {}) > 45
-                    return [_cmd("PASS", my_player_id, team_id,
-                                 {"target_player_id": outlet,
-                                  "type": "AERIAL" if long_ball else "THROUGH"})], "build"
+            lane = cfg.outlet_lane_radius * (1.5 if pressed else 1.0)
+            outlet = _best_outlet(cfg, players, team_id, my_player_id,
+                                  me_pos, opp_goal_x, opponents, lane_radius=lane)
+            if outlet is not None:
+                tgt = next(p for p in players
+                           if _player_idx(p) == outlet and _is_my_team(p, team_id))
+                long_ball = dist(me_pos, tgt.get("position", {}) or {}) > 45
+                return [_cmd("PASS", my_player_id, team_id,
+                             {"target_player_id": outlet,
+                              "type": "AERIAL" if long_ball else "THROUGH"})], "build"
         aim, _, _ = _best_shot_aim(me_pos, opp_goal_x, opponents)
         return _force_shot(commands, cmd, ctype, params, my_player_id, team_id,
                            aim, "blast")
