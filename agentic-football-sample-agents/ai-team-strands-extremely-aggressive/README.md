@@ -13,6 +13,7 @@ Built with [Strands Agents SDK](https://github.com/strands-agents/sdk-python) an
 - **DEF**: Attacking defender — joins every attack, shoots from distance, rarely tracks back
 - **DEF (classic)**: Optional second defender runtime (`agg_def_classic_agent`) — portal default prompt, pure LLM with no code overrides; deploy with `./deploy-all.sh ai-def-classic`
 - **MID**: Second striker — shoots first, passes forward only, never defends
+- **MID (classic)**: Optional second midfielder runtime (`agg_mid_classic_agent`) — portal default prompt, pure LLM with no code overrides; deploy with `./deploy-all.sh ai-mid-classic`
 - **FWD1**: Pure goal scorer — camps near goal, shoots at every opportunity
 - **FWD2**: Pure goal scorer — same as FWD1, stays on right side
 
@@ -25,7 +26,8 @@ agents/
     ├── ai-gk/          # Goalkeeper  (player 0) — Nova Micro
     ├── ai-def/         # Defender    (player 1) — tuned + overrides (agg_def_agent)
     ├── ai-def-classic/ # Defender alt (player 1) — vanilla prompt (agg_def_classic_agent)
-    ├── ai-mid/         # Midfielder  (player 2) — Nova Pro
+    ├── ai-mid/         # Midfielder  (player 2) — tuned + overrides (agg_mid_agent)
+    ├── ai-mid-classic/ # Midfielder alt (player 2) — vanilla prompt (agg_mid_classic_agent)
     ├── ai-fwd1/        # Forward 1   (player 3) — Nova Micro
     ├── ai-fwd2/        # Forward 2   (player 4) — Nova Lite
     ├── deploy-all.sh   # Build + deploy script
