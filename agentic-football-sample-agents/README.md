@@ -446,6 +446,7 @@ iter-9 的回答是把「对方压上 → 我们打身后」变成代码级流�
 | 文件 | 作用 |
 |------|------|
 | `portal_bot.py` | Playwright 驱动 [agentic-football.aws.dev](https://agentic-football.aws.dev/)：队伍码登录（会话持久化在 `.portal-profile/`）、`POST /practice-matches` 约 bot 练习赛（balanced=The Benchmark FC / aggressive=Total Attack United / defensive=Fort Knox Athletic）、打开真实观赛页、轮询终场比分、可发教练指令 |
+| `portal_bot.LiveCoach` | **AI 场边教练（比赛进行中实时喊话）**：每 10s 轮询 `/matches/{id}/narration` 实时事件流（进球带比分、射门、压迫、终场哨），按「局势 → 门户预设指令」决策后 POST `/coach-instructions`。游戏引擎会把最新教练指令注入全部 5 个 agent 的提示词（`lib/state.py` 的 COACH ORDER 顶级优先），一句话同时转向全队 |
 | `lib/tuning.py` + `lib/tuning.json` | **部署期调参面**：autopilot 只改 `tuning.json`，agent 启动时叠加到各自的 `OverrideConfig` 上（global → 按位置覆盖）。所有数值被 `BOUNDS` 钳制，调参器永远写不出离谱值；文件为空 = 行为与 iter-9 完全一致 |
 | `autopilot.py` | 循环编排：比赛 → `collect_kpis()`（射门纪律 / 远射浪费 / 控球高度 / 被围攻指标）→ 调参（默认规则调参器，`--llm-advisor` 让 Nova Lite 在同样的 BOUNDS 内提案）→ WSL 逐 agent 重部署（S3 超时自动重试、凭证过期立即停）→ `autopilot_history.jsonl` 记录每轮配置与结果 |
 
@@ -468,9 +469,23 @@ python autopilot.py --once --headed
 python autopilot.py --once --skip-deploy
 python autopilot.py --llm-advisor
 
-# 手动打一场看结果（退出码 0=赢）
+# 手动打一场看结果（退出码 0=赢）；--no-live-coach 关闭场边教练
 python portal_bot.py match --bot aggressive --headed
 ```
+
+场边教练的局势 → 指令映射（门户只接受 6 个预设，自由文本会被 400 拒绝）：
+
+| 局势 | 预设指令 | 效果（引擎注入的喊话） |
+|------|---------|--------------------|
+| 刚丢球（事件触发，无冷却） | `press_high` | 立刻高位反抢 |
+| 刚进球领先 | `slow_the_tempo` | 稳住阵型别浪 |
+| 落后（常规时间） | `shoot_on_sight` | "Why are you keeping the ball! Shoot!" |
+| 落后（最后 30%时间） | `go_all_out_attack` | 全员压上死磕 |
+| 领先（最后 30%时间） | `slow_the_tempo` | 收缩保胜果 |
+| 平局（最后 30%时间） | `increase_the_tempo` | 提速抢胜 |
+| 被围攻（30s 内对方 3+ 次射门/压迫）| `slow_the_tempo` | 稳住再反击 |
+
+规则：进球/丢球事件绕过 45s 冷却立即喊；相同指令已生效时去重不重发；终场后 400 静默忽略。
 
 调参器的规则沿用 iter-6→9 的手工经验：丢 3 球以上 → 提前进入反击姿态（`press_bodies -1`）+ 扩大盯人半径；远射占比 >40% → 收紧 `longshot_max`、提高 `gk_out_dist` 门槛；0 进球且射门 <8 → `shoot_threshold +2` 提前开火；控球率 <35% → 降低 `outlet_min_gain` 让解压传球更容易出脚；**赢球则冻结配置**。每一轮的 KPI、调参前后对照、部署结果都会追加到 `autopilot_history.jsonl`，这就是整个循环的「经验」。
 

@@ -334,7 +334,8 @@ def run_iteration(i: int, bot: str, args) -> dict:
 
     print("[1/4] playing match via portal...")
     result = play_one_match(bot_variant=bot, headed=args.headed,
-                            coach_order=args.coach, timeout_s=args.match_timeout)
+                            coach_order=args.coach, timeout_s=args.match_timeout,
+                            live_coach=not args.no_live_coach)
     print(f"  final: us {result.get('my_score')} — {result.get('opp_score')} "
           f"{result.get('opp_name') or bot}  ({'WON' if result.get('won') else 'lost'})")
 
@@ -399,6 +400,8 @@ def main():
     ap.add_argument("--bots", default="aggressive",
                     help="comma list to rotate, e.g. aggressive,defensive,balanced")
     ap.add_argument("--coach", default=None, help="coach order at kickoff")
+    ap.add_argument("--no-live-coach", action="store_true",
+                    help="disable in-match situational coach orders")
     ap.add_argument("--match-timeout", type=int, default=1500)
     ap.add_argument("--skip-deploy", action="store_true",
                     help="tune only; do not redeploy")

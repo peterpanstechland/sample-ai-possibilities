@@ -218,9 +218,12 @@ class PortalBot:
             pass
 
     def wait_for_result(self, match_id: str, my_team_id: str,
-                        timeout_s: int = 1500, poll_s: int = 15) -> dict:
+                        timeout_s: int = 1500, poll_s: int = 10,
+                        coach: "LiveCoach | None" = None) -> dict:
         """Poll the match until completed/cancelled; return the normalized
-        record plus my side / my score / opponent score / won flag."""
+        record plus my side / my score / opponent score / won flag.
+        A LiveCoach, when given, reads live events on every poll and shouts
+        situational COACH ORDERs into the team chat."""
         deadline = time.time() + timeout_s
         last_status = None
         while time.time() < deadline:
@@ -236,6 +239,11 @@ class PortalBot:
                 last_status = m["status"]
             if m["status"] in ("completed", "cancelled", "declined"):
                 return self._attach_sides(m, my_team_id)
+            if coach is not None and m["status"] == "in_progress":
+                try:
+                    coach.poll(self._attach_sides(dict(m), my_team_id)["my_side"])
+                except Exception as e:  # coaching is best-effort, never fatal
+                    print(f"  coach poll error (non-fatal): {e}")
             time.sleep(poll_s)
         raise PortalError(f"match {match_id} did not finish within {timeout_s}s "
                           f"(last status: {last_status})")
@@ -261,6 +269,11 @@ class PortalBot:
         self.api("POST", f"/matches/{match_id}/coach-instructions",
                  {"team_id": team_id, "instruction": instruction})
 
+    def narration(self, match_id: str, since: int = 0) -> dict:
+        """Incremental live events: momentType (buildup/pressing/shot/goal/
+        final_whistle), teamSide, params.{home,away} score on goals, gameTime."""
+        return self.api("GET", f"/matches/{match_id}/narration?since={since}")
+
     def match_report(self, match_id: str) -> dict:
         try:
             return self.api("GET", f"/matches/{match_id}/report")
@@ -270,6 +283,104 @@ class PortalBot:
     def recent_matches(self) -> list[dict]:
         out = self.api("GET", "/matches")
         return [self._norm_match(m) for m in out.get("items", [])]
+
+
+class LiveCoach:
+    """Situational touchline coach: reads the live narration feed and sends
+    coach instructions the game engine forwards into every agent's prompt as
+    a top-priority COACH ORDER (lib/state.py) — one well-timed order steers
+    all five LLMs at once.
+
+    The portal only accepts preset instructions (free text is rejected with
+    400), so situations map onto the 6 presets. Event-driven (react to goals
+    immediately) + state-driven (score/time phase), with a cooldown and
+    same-situation dedupe so the chat isn't flooded.
+    """
+
+    MATCH_LEN = 120  # gameTime runs 0..120 in portal matches
+    PRESETS = ("press_high", "play_possession", "shoot_on_sight",
+               "slow_the_tempo", "increase_the_tempo", "go_all_out_attack")
+
+    def __init__(self, bot: PortalBot, match_id: str, team_id: str,
+                 cooldown_s: float = 45.0):
+        self.bot = bot
+        self.match_id = match_id
+        self.team_id = team_id
+        self.cooldown_s = cooldown_s
+        self._since = 0
+        self._last_sent_at = 0.0
+        self._last_key = None
+        self.my = 0
+        self.opp = 0
+        self.game_time = 0
+        self._opp_threats: list[int] = []  # gameTimes of opp shots/pressing
+
+    # --- situation -> preset instruction --------------------------------------
+    def _decide(self, scored: bool, conceded: bool) -> tuple[str, str] | None:
+        """Return (situation, preset). The engine turns presets into touchline
+        shouts, e.g. shoot_on_sight -> 'Why are you keeping the ball! Shoot!'"""
+        diff = self.my - self.opp
+        late = self.game_time >= self.MATCH_LEN * 0.7
+        siege = (sum(1 for t in self._opp_threats
+                     if t >= self.game_time - 30) >= 3)
+
+        if conceded:
+            return ("conceded", "press_high")            # win the ball back now
+        if scored and diff > 0:
+            return ("scored", "slow_the_tempo")          # keep the shape, no chaos
+        if diff < 0 and late:
+            return ("chase-late", "go_all_out_attack")   # nothing to lose
+        if diff < 0:
+            return ("chase", "shoot_on_sight")           # our identity: shoot more
+        if diff > 0 and late:
+            return ("protect", "slow_the_tempo")         # hold the line
+        if diff == 0 and late:
+            return ("push-late", "increase_the_tempo")   # go win it
+        if siege and diff <= 0:
+            return ("siege", "slow_the_tempo")           # compact, then counter
+        return None
+
+    def poll(self, my_side: str):
+        """Ingest new narration events, then send at most one instruction."""
+        n = self.bot.narration(self.match_id, since=self._since)
+        if isinstance(n.get("latestSeq"), int):
+            self._since = max(self._since, n["latestSeq"])
+        scored = conceded = False
+        for ev in n.get("lines") or []:
+            t = ev.get("gameTime") or 0
+            self.game_time = max(self.game_time, t)
+            mt, side = ev.get("momentType"), ev.get("teamSide")
+            if mt == "goal":
+                p = ev.get("params") or {}
+                if isinstance(p.get("home"), int) and isinstance(p.get("away"), int):
+                    self.my, self.opp = ((p["home"], p["away"])
+                                         if my_side == "home"
+                                         else (p["away"], p["home"]))
+                if side == my_side:
+                    scored = True
+                else:
+                    conceded = True
+            elif mt in ("shot", "pressing") and side and side != my_side:
+                self._opp_threats.append(t)
+
+        decision = self._decide(scored, conceded)
+        if decision is None:
+            return
+        key, preset = decision
+        urgent = key in ("conceded", "scored")  # goals bypass the cooldown
+        now = time.time()
+        if not urgent and now - self._last_sent_at < self.cooldown_s:
+            return
+        if preset == self._last_key:
+            return  # already the active order — repeating it adds nothing
+        try:
+            self.bot.send_coach_order(self.match_id, self.team_id, preset)
+        except PortalError as e:
+            if "in-progress" in str(e):
+                return  # final whistle beat us to it — benign race
+            raise
+        self._last_sent_at, self._last_key = now, preset
+        print(f"  COACH [{self.game_time}s {self.my}-{self.opp}] {key} -> {preset}")
 
 
 # --- CLI ----------------------------------------------------------------------
@@ -296,7 +407,8 @@ def cmd_status(args):
 
 def cmd_match(args):
     result = play_one_match(bot_variant=args.bot, headed=args.headed,
-                            coach_order=args.coach, timeout_s=args.timeout)
+                            coach_order=args.coach, timeout_s=args.timeout,
+                            live_coach=not args.no_live_coach)
     print(json.dumps(result, indent=2, ensure_ascii=False))
     sys.exit(0 if result.get("won") else 1)
 
@@ -310,9 +422,10 @@ def cmd_report(args):
 
 def play_one_match(bot_variant: str = "aggressive", headed: bool = False,
                    coach_order: str | None = None,
-                   timeout_s: int = 1500) -> dict:
+                   timeout_s: int = 1500, live_coach: bool = True) -> dict:
     """One full portal round-trip (login -> match vs bot -> final score).
-    This is the entry point autopilot.py uses."""
+    This is the entry point autopilot.py uses. live_coach=True keeps a
+    situational touchline coach shouting COACH ORDERs during the match."""
     t0 = time.time()
     with PortalBot(headed=headed) as bot:
         team = bot.ensure_login()
@@ -328,14 +441,20 @@ def play_one_match(bot_variant: str = "aggressive", headed: bool = False,
                 print(f"  coach order sent: {coach_order}")
             except PortalError as e:
                 print(f"  coach order failed (non-fatal): {e}")
-        result = bot.wait_for_result(match_id, team_id, timeout_s=timeout_s)
+        coach = (LiveCoach(bot, match_id, team_id) if live_coach else None)
+        result = bot.wait_for_result(match_id, team_id, timeout_s=timeout_s,
+                                     coach=coach)
         result["report"] = bot.match_report(match_id)
         result["bot"] = bot_variant
         result["duration_s"] = round(time.time() - t0)
+        if coach is not None:
+            result["coach_final"] = {"my": coach.my, "opp": coach.opp,
+                                     "last_key": coach._last_key}
         return result
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)  # live progress when piped
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -350,6 +469,8 @@ def main():
     p = sub.add_parser("match", help="play one practice match vs a bot")
     p.add_argument("--bot", choices=sorted(BOTS), default="aggressive")
     p.add_argument("--coach", help="coach order to send at kickoff")
+    p.add_argument("--no-live-coach", action="store_true",
+                   help="disable the situational touchline coach")
     p.add_argument("--timeout", type=int, default=1500,
                    help="max seconds to wait for the final whistle")
     p.add_argument("--headed", action="store_true", help="watch the match live")
