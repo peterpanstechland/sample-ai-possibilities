@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import configparser
 import json
 import os
 import threading
@@ -42,8 +43,32 @@ _AUTH_ERROR_CODES = {
     "UnrecognizedClientException", "AccessDeniedException", "AccessDenied",
 }
 _AUTH_HINT = ("AWS 凭证过期/无效（session 失效）。请从 Workshop Studio 重新获取凭证并更新 "
-              "~/.aws/credentials（运行 aws configure 或直接编辑文件），刷新本页即可 — "
-              "服务器每次查询都会重读凭证文件，无需重启。")
+              "~/.aws/credentials（运行 aws configure 或直接编辑文件），刷新本页即可。"
+              "若仍报错，检查启动 dashboard 的终端是否还 export 了旧的 AWS_* 环境变量，"
+              "关闭该终端或重启 observe_dashboard.py。")
+
+
+def _logs_client(region: str):
+    """Prefer ~/.aws/credentials over process env vars.
+
+    Workshop flows often update the file while an old terminal still exports
+    expired AWS_ACCESS_KEY_ID / AWS_SESSION_TOKEN — boto3 would keep using those.
+    """
+    cred_path = Path.home() / ".aws" / "credentials"
+    if cred_path.exists():
+        cp = configparser.ConfigParser()
+        cp.read(cred_path)
+        if cp.has_section("default"):
+            section = cp["default"]
+            key_id = section.get("aws_access_key_id")
+            if key_id:
+                return boto3.session.Session(
+                    aws_access_key_id=key_id,
+                    aws_secret_access_key=section.get("aws_secret_access_key"),
+                    aws_session_token=section.get("aws_session_token"),
+                    region_name=region,
+                ).client("logs")
+    return boto3.session.Session().client("logs", region_name=region)
 
 
 def _cached(key, fn):
@@ -59,11 +84,8 @@ def _cached(key, fn):
 
 def fetch_cloud(region: str, prefix: str, minutes: int) -> dict:
     def load():
-        # Fresh session per query: unlike the process-wide default session, this
-        # re-reads ~/.aws/credentials every time, so rotating the workshop's
-        # temporary STS credentials never requires a dashboard restart.
         try:
-            logs = boto3.session.Session().client("logs", region_name=region)
+            logs = _logs_client(region)
             groups = find_log_groups(logs, prefix)
             rows = run_query(logs, groups, minutes) if groups else []
         except NoCredentialsError:
