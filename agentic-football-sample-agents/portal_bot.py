@@ -109,16 +109,22 @@ class PortalBot:
 
     def _attach_over_cdp(self):
         """Connect to a Chrome/Edge already running with --remote-debugging-port.
-        Reuses the user's real profile: their portal login is right there."""
+        Reuses that browser's profile: the portal login is right there."""
+        # On Windows 'localhost' often resolves to IPv6 ::1, but Chrome's debug
+        # port listens on IPv4 127.0.0.1 -> use the explicit IPv4 loopback.
+        url = self.cdp_url.replace("//localhost:", "//127.0.0.1:")
         try:
-            self._browser = self._pw.chromium.connect_over_cdp(self.cdp_url)
+            self._browser = self._pw.chromium.connect_over_cdp(url)
         except Exception as e:
             raise PortalError(
-                f"Could not attach to a browser at {self.cdp_url}: {e}\n"
-                "Start Chrome/Edge with a debug port first, e.g.:\n"
-                '  chrome.exe --remote-debugging-port=9222 '
-                '--user-data-dir="%LOCALAPPDATA%\\Google\\Chrome\\User Data"\n'
-                "then log into the portal in that window.")
+                f"Could not attach to a browser at {url}: {e}\n"
+                "Start Chrome/Edge with a debug port AND a DEDICATED profile "
+                "dir (Chrome 136+ ignores the debug port on the default "
+                "profile), e.g. in PowerShell:\n"
+                '  & "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" '
+                '--remote-debugging-port=9222 --user-data-dir="$env:TEMP\\aafc-debug"\n'
+                "The pinned team code authenticates it, so no manual login "
+                "is needed in that window.")
         self._ctx = (self._browser.contexts[0] if self._browser.contexts
                      else self._browser.new_context())
         # Prefer a tab already on the portal; otherwise reuse/open one.
@@ -491,11 +497,12 @@ class LiveCoach:
 # --- CLI ----------------------------------------------------------------------
 
 def _add_cdp_args(p):
-    p.add_argument("--cdp", nargs="?", const="http://localhost:9222",
+    p.add_argument("--cdp", nargs="?", const="http://127.0.0.1:9222",
                    metavar="URL",
                    help="attach to YOUR running browser over CDP "
-                        "(default http://localhost:9222). Start Chrome/Edge "
-                        "with --remote-debugging-port=9222 first.")
+                        "(default http://127.0.0.1:9222). Start Chrome/Edge "
+                        "with --remote-debugging-port=9222 AND a dedicated "
+                        "--user-data-dir first.")
 
 
 def _cdp_url(args) -> str | None:
