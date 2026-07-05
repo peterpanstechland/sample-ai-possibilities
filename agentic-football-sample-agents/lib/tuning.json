@@ -1,4 +1,15 @@
 {
+  "FWD1": {
+    "mark_radius": 16.0,
+    "shoot_threshold": 48.0
+  },
+  "FWD2": {
+    "mark_radius": 16.0,
+    "shoot_threshold": 48.0
+  },
+  "MID": {
+    "shoot_threshold": 47.0
+  },
   "global": {
     "build_from_back": true,
     "gk_out_dist": 14.0,

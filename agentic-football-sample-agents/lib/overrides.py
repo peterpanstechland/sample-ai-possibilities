@@ -23,6 +23,11 @@ the match-deciding rules deterministic:
      most advanced open forward; no outlet -> carry up the wing;
   5. phantom — SHOOT/PASS without the ball wastes the tick; designated player
      presses instead, everyone else takes a real defensive job;
+  5b. attack support (iter-11b) — while a TEAMMATE holds the ball, MID/FWDs
+     may not MARK/hold stance/drift backwards (tournament data: FWD1 took 0
+     shots and MID 2 across ~4 matches while spending 80-91% of ticks on
+     MOVE_TO+MARK); anything but an advancing run becomes the wide support
+     spot so the attackers stretch the box and arrive for the shot;
   6. no-chase — a non-designated player pressing/chasing is rewritten to a
      MARK on the nearest passing option or a compact-line position;
   7. anchor clamp — defensive-phase MOVE_TO far off the role's ball-shifted
@@ -120,13 +125,16 @@ def _anchor(position_label: str, team_id: int, ball_pos: dict,
 
 
 def _support_spot(position_label: str, team_id: int, ball_pos: dict) -> tuple[float, float]:
-    """Where to run when a teammate has the ball (attack support)."""
+    """Where to run when a teammate has the ball (attack support).
+    Forwards split WIDE around the posts (iter-11b: ±11 instead of ±6) so the
+    box isn't one clump — stretching the keeper opens the shot lanes the
+    enforce-shot rule needs."""
     my_goal_x, opp_goal_x = get_goal_positions(team_id)
     dir_my = 1.0 if my_goal_x > 0 else -1.0
     if position_label == "FWD1":
-        return opp_goal_x + 7 * dir_my, -6.0
+        return opp_goal_x + 7 * dir_my, -11.0
     if position_label == "FWD2":
-        return opp_goal_x + 7 * dir_my, 6.0
+        return opp_goal_x + 7 * dir_my, 11.0
     if position_label == "MID":
         return opp_goal_x * 0.6, _between(-10.0, 10.0, ball_pos.get("y", 0) * 0.4)
     return -8 * dir_my, 0.0  # DEF: sit just past halfway as the safety valve
@@ -321,7 +329,21 @@ def apply_overrides(commands: list[dict], game_state: dict, team_id: int,
 
     # --- 2. Teammate holds it: commands that need the ball become support runs
     if teammate_has:
-        if ctype in _NEEDS_BALL_CMDS or ctype in _CHASE_CMDS:
+        support = ctype in _NEEDS_BALL_CMDS or ctype in _CHASE_CMDS
+        # Iter-11b (tournament data: FWD1 0 shots / MID 2 shots across ~4
+        # matches, 80-91% of their ticks spent on MOVE_TO+MARK): attackers may
+        # not mark, hold a stance, or drift backwards while WE have the ball.
+        # Only a genuinely advancing run survives; everything else becomes the
+        # wide/box support spot that stretches the defense.
+        if not support and position_label in ("MID", "FWD1", "FWD2"):
+            if ctype in ("MARK", "FOLLOW_PLAYER", "SET_STANCE"):
+                support = True
+            elif ctype == "MOVE_TO":
+                tx = params.get("target_x")
+                advancing = (isinstance(tx, (int, float))
+                             and (tx - me_pos.get("x", 0)) * -dir_my > 2)
+                support = not advancing
+        if support:
             sx, sy = _support_spot(position_label, team_id, ball_pos)
             return [_cmd("MOVE_TO", my_player_id, team_id,
                          {"target_x": round(sx, 1), "target_y": round(sy, 1),

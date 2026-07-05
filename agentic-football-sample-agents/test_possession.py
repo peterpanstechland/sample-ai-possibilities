@@ -417,6 +417,41 @@ out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, metho
                            gsM6, 0, 0, "GK", BUILD)
 assert tag is None and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
 
+# --- Scenario N: iter-11b attack support (FWD/MID must stretch, not mark) ---
+# Tournament data (~4 matches): FWD1 0 shots, MID 2, 80-91% of attacker ticks
+# were MOVE_TO+MARK. While a teammate holds the ball, attackers now either
+# make an advancing run or get sent to the wide support spots.
+# gs2: home P3 holds at (14,-5). FWD2 = P4 at (20,15), MID = P2 at (5,-8).
+
+# N1: FWD2 marks during our possession -> wide far-post support run (48, 11).
+out, tag = apply_overrides(_mk_for(4, "MARK", target_player_id=1, tightness="TIGHT"),
+                           gs2, 0, 4, "FWD2", OV)
+assert tag == "support" and out[0]["commandType"] == "MOVE_TO", (tag, out)
+assert out[0]["parameters"]["target_x"] == 48 and out[0]["parameters"]["target_y"] == 11.0, out
+
+# N2: FWD2 drifts BACKWARDS (target_x 5 < current 20) -> support run.
+out, tag = apply_overrides(_mk_for(4, "MOVE_TO", target_x=5, target_y=15, sprint=False),
+                           gs2, 0, 4, "FWD2", OV)
+assert tag == "support" and out[0]["parameters"]["target_x"] == 48, (tag, out)
+
+# N3: FWD2 makes a genuinely advancing run (40 > 20+2) -> the LLM's own idea
+# stands untouched.
+out, tag = apply_overrides(_mk_for(4, "MOVE_TO", target_x=40, target_y=8, sprint=True),
+                           gs2, 0, 4, "FWD2", OV)
+assert tag is None and out[0]["parameters"]["target_x"] == 40, (tag, out)
+
+# N4: MID parks in a stance -> pushed up to the edge-of-box support spot
+# (x = 0.6 * 55 = 33, y follows the ball at 40%).
+out, tag = apply_overrides(_mk_for(2, "SET_STANCE", stance=1),
+                           gs2, 0, 2, "MID", OV)
+assert tag == "support" and out[0]["commandType"] == "MOVE_TO", (tag, out)
+assert out[0]["parameters"]["target_x"] == 33.0 and out[0]["parameters"]["target_y"] == -2.0, out
+
+# N5: DEF may still MARK during our possession — the safety valve is exempt.
+out, tag = apply_overrides(_mk_for(1, "MARK", target_player_id=1, tightness="TIGHT"),
+                           gs2, 0, 1, "DEF", OV)
+assert tag is None and out[0]["commandType"] == "MARK", (tag, out)
+
 # --- Scenario L: tuning overlay (autopilot control surface) -----------------
 from tuning import apply_tuning, clamp, get as tuning_get
 
@@ -454,5 +489,6 @@ print("Scenario I (point-blank always shoots even with slight overlap) — OK")
 print("Scenario J (tactical overrides: forced shot / no-chase / anchor / support) — OK")
 print("Scenario K (GK/DEF blast, long shot, counter outlet, phantom fix) — OK")
 print("Scenario M (build-from-back: outlet when safe, blast when pressed) — OK")
+print("Scenario N (attack support: FWD/MID stretch wide instead of marking) — OK")
 print("Scenario L (tuning.json overlay: merge, clamp, immutability) — OK")
 print("ALL LIB TESTS PASSED")

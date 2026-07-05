@@ -502,6 +502,8 @@ python portal_bot.py coach --forever --cdp
 
 调参器的规则沿用 iter-6→9 的手工经验：丢 3 球以上 → 提前进入反击姿态（`press_bodies -1`）+ 扩大盯人半径；远射占比 >40% → 收紧 `longshot_max`、提高 `gk_out_dist` 门槛；0 进球且射门 <8 → `shoot_threshold +2` 提前开火；控球率 <35% → 降低 `outlet_min_gain` 让解压传球更容易出脚；**赢球则冻结配置**。每一轮的 KPI、调参前后对照、部署结果都会追加到 `autopilot_history.jsonl`，这就是整个循环的「经验」。
 
+**Iter-11b — 前锋/中场进攻再平衡（锦标赛数据驱动）**：300 分钟锦标赛日志（含 0-3 负 Excalibur）显示 FWD1 射门 **0** 次、MID 2 次，三名进攻球员 80-91% 的 tick 花在 MOVE_TO+MARK 上（`anchor` 333/345、`no-chase` 327 次改写）——前锋被防守规则当后卫用，我方持球时也没人强制他们拉开。改动：(1) **我方持球时 MID/FWD 的 MARK/SET_STANCE/回撤 MOVE_TO 一律改写为支援跑位**（`ov=support`），前锋冲两侧门柱外 ±11 拉宽禁区、MID 压到禁区弧顶（x=0.6×球门），只有真正向前的跑位放行；(2) 前锋 `mark_radius` 24→16（per-position tuning）：防守时少被拖去盯远人，站高位当 build_from_back 的出球目标；(3) FWD `shoot_threshold` 48、MID 47：接球更早开火。回归测试 Scenario N 覆盖（盯人改写 / 回撤改写 / 向前跑放行 / DEF 豁免）。
+
 **Iter-11 — build from the back（由 6 场 KPI 历史数据驱动）**：历史数据里每一场都是同一个病灶——`far_shot_ratio` 0.92-0.98（射门几乎全是 45+ 的大脚）、`in_range_ticks = 0`（全队持球时从未进入过射程内）、GK 单场 25-32 次「射门」全是解围。无脑 blast 等于每次拿球都把球权还给对手，对弱队够赢、对进攻型强队就是被打穿的根源。改动：`build_from_back`（`tuning.json` 全局开启）——GK/DEF 拿球时**若无人逼抢（最近对手 > `blast_pressure_dist`，默认 10）且有干净的向前传球线路**，改为向最前场的空位队友送出弹进空间的 THROUGH/长距离 AERIAL 出球（`ov=build`），把球喂进进攻三区；**被逼抢或无人可传时照旧 blast**（iter-9 的用户规则保持为兜底）。规则调参器在远射比过高时会自动收小 `blast_pressure_dist`（更敢出球），回归测试 Scenario M 覆盖全部分支（安全出球 / 被压 blast / 无线路 blast / 默认关闭 / 定位球豁免）。
 
 注意：
