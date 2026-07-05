@@ -2,6 +2,7 @@
 .portal-profile/
 autopilot-logs/
 autopilot_history.jsonl
+bench_models_results.json
 
 # Local deploy logs and toolchains
 deploy-*.log

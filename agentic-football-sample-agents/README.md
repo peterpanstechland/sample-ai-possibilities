@@ -502,6 +502,8 @@ python portal_bot.py coach --forever --cdp
 
 调参器的规则沿用 iter-6→9 的手工经验：丢 3 球以上 → 提前进入反击姿态（`press_bodies -1`）+ 扩大盯人半径；远射占比 >40% → 收紧 `longshot_max`、提高 `gk_out_dist` 门槛；0 进球且射门 <8 → `shoot_threshold +2` 提前开火；控球率 <35% → 降低 `outlet_min_gain` 让解压传球更容易出脚；**赢球则冻结配置**。每一轮的 KPI、调参前后对照、部署结果都会追加到 `autopilot_history.jsonl`，这就是整个循环的「经验」。
 
+**Iter-11d — 进攻三人组换 Nova 2 Lite（`bench_models.py` 实测驱动）**：用真实 FWD1 提示词 + 训练场三个典型局面对 7 个 Bedrock 候选模型各跑 24 次实测（同一条生产调用链）。结论：`us.amazon.nova-2-lite-v1:0` 全绿——JSON 解析 24/24、防守局面唯一正确选 MARK、p95 反而低于 Micro（1303 vs 1484ms，中位数仅 +8%）；llama3-1-8b 中位最快但尾部肥+服从最差；claude-haiku-4.5 在 200 token 预算下频繁截断且 p95 3.1s；nova-lite v1 空数组率 38%。落地：**MID/FWD1/FWD2 切 Nova 2 Lite**（决策质量收益最大），**GK/DEF 留 Nova Micro**（行为已被 blast/build override 兜底，要的是快）。真 tool-call 路线维持不采用：两轮模型往返 + Lambda 物理上超出 1s tick 预算，工具数学继续由 `tactics_report` 进程内预计算注入提示词。
+
 **Iter-11c — 被逼抢也要出球（1-5 验证赛数据驱动）**：iter-11 的门槛是「被逼抢（对手 ≤ `blast_pressure_dist`）就大脚」，验证赛（1-5 负 Total Attack United）暴露了盲点：对高位逼抢队，GK/DEF 每次持球必然处于被逼抢状态 → `ov=build` 全场 **0 次**触发，后场出球在最需要它的对手面前被完全关死。改为：被逼抢时**仍然找出球点，但安全走廊要求放宽 1.5 倍**（`outlet_lane_radius` ×1.5），真正无人可传才大脚——一脚干净的出球正是破解逼抢的方式。Scenario M2/M2b 覆盖「被压但有宽线路 → 出球」和「被压且全堵死 → 大脚」。
 
 **Iter-11b — 前锋/中场进攻再平衡（锦标赛数据驱动）**：300 分钟锦标赛日志（含 0-3 负 Excalibur）显示 FWD1 射门 **0** 次、MID 2 次，三名进攻球员 80-91% 的 tick 花在 MOVE_TO+MARK 上（`anchor` 333/345、`no-chase` 327 次改写）——前锋被防守规则当后卫用，我方持球时也没人强制他们拉开。改动：(1) **我方持球时 MID/FWD 的 MARK/SET_STANCE/回撤 MOVE_TO 一律改写为支援跑位**（`ov=support`），前锋冲两侧门柱外 ±11 拉宽禁区、MID 压到禁区弧顶（x=0.6×球门），只有真正向前的跑位放行；(2) 前锋 `mark_radius` 24→16（per-position tuning）：防守时少被拖去盯远人，站高位当 build_from_back 的出球目标；(3) FWD `shoot_threshold` 48、MID 47：接球更早开火。回归测试 Scenario N 覆盖（盯人改写 / 回撤改写 / 向前跑放行 / DEF 豁免）。

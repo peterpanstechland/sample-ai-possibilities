@@ -76,7 +76,9 @@ OVERRIDE_CONFIG = OverrideConfig(wing_y=-14.0)
 
 # --- Wire it up ---
 
-agent = create_agent(SYSTEM_PROMPT, model_id="us.amazon.nova-micro-v1:0")
+# Nova 2 Lite for the attacking trio (bench_models.py bake-off winner:
+# 100% JSON parse, best tactical adherence, tighter p95 than Micro).
+agent = create_agent(SYSTEM_PROMPT, model_id="us.amazon.nova-2-lite-v1:0")
 create_invoke_handler(
     app, agent, MY_PLAYER_ID, POSITION_LABEL, fallback_commands,
     fallback_cfg=AGG_FWD1_CONFIG,
