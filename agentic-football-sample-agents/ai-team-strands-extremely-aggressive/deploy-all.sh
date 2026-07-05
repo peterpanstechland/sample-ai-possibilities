@@ -24,6 +24,8 @@ AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
 export AWS_DEFAULT_REGION
 
 ALL_AGENTS=("ai-gk" "ai-def" "ai-mid" "ai-fwd1" "ai-fwd2")
+# Optional sixth runtime — classic portal-default DEF prompt (no overrides):
+#   ./deploy-all.sh ai-def-classic
 
 if [ -n "$1" ]; then
   AGENTS=("$1")
