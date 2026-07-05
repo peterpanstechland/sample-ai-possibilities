@@ -8,9 +8,22 @@ VALID_COMMANDS = {
     "FOLLOW_PLAYER", "GK_DISTRIBUTE", "SET_STANCE", "CLEAR_OVERRIDE", "RESET",
 }
 
+# Nova 2 Lite copies prompt formulas straight into JSON number slots
+# ("target_x":55*0.75) instead of evaluating them like Micro does; fold the
+# product so json.loads accepts the command instead of burning the tick on
+# the parse fallback (observed 24/86 FWD ticks in the first Lite match).
+_ARITH = re.compile(
+    r'(?<=[:\s\[,])(-?\d+(?:\.\d+)?)\s*\*\s*(-?\d+(?:\.\d+)?)(?=\s*[,}\]])')
+
+
+def _fold_arithmetic(text: str) -> str:
+    return _ARITH.sub(
+        lambda m: repr(float(m.group(1)) * float(m.group(2))), text)
+
 
 def parse_commands(text: str, team_id: int, my_player_id: int) -> list[dict]:
     """Extract commands from LLM response, forcing the given player ID on all commands."""
+    text = _fold_arithmetic(text)
     match = re.search(r"\[[\s\S]*\]", text)
     if match:
         try:

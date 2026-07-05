@@ -145,6 +145,19 @@ assert shoot_bare["parameters"] == {"aim_location": "CENTER", "power": 1.0}, sho
 pass_self = parse_commands('[{"commandType":"PASS","parameters":{"target_player_id":4}}]', 0, 4)[0]
 assert pass_self["parameters"]["target_player_id"] == 3, pass_self
 
+# Nova 2 Lite emits unevaluated arithmetic in number slots — folded, not dropped
+lite_arith = parse_commands(
+    '```json\n[{"commandType":"MOVE_TO","playerId":4,'
+    '"parameters":{"target_x":-55*0.5,"target_y":14,"sprint":true},"duration":0}]\n```',
+    0, 4)
+assert lite_arith and lite_arith[0]["parameters"]["target_x"] == -27.5, lite_arith
+lite_arith2 = parse_commands(
+    '[{"commandType":"MOVE_TO","parameters":{"target_x":55*0.75,"target_y":-14}}]', 0, 3)
+assert lite_arith2 and lite_arith2[0]["parameters"]["target_x"] == 41.25, lite_arith2
+# plain numbers and strings pass through the folder untouched
+assert parse_commands('[{"commandType":"MOVE_TO","parameters":{"target_x":40.5,"target_y":-8}}]',
+                      0, 3)[0]["parameters"]["target_x"] == 40.5
+
 # --- Scenario H: shot lane checking (LANE CLEAR vs LANE BLOCKED) ---
 # Clear lane: no opponent anywhere near the line me -> (55,0)
 me_open = {"x": 30.0, "y": 0.0}
