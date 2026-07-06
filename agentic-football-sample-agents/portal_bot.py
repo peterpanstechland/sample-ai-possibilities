@@ -350,6 +350,12 @@ class PortalBot:
                     time.sleep(poll_s)
                     continue
                 raise
+            except Exception as e:
+                if "Timeout" in type(e).__name__ or "timeout" in str(e).lower():
+                    print(f"  match poll timeout (retrying): {e}")
+                    time.sleep(poll_s)
+                    continue
+                raise
             if m["status"] != last_status:
                 print(f"  match {match_id}: {m['status']}")
                 last_status = m["status"]

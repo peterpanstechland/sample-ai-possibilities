@@ -2,6 +2,9 @@
 
 import math
 
+from forecast import forecast_prompt_lines
+import tuning as tuning_mod
+
 
 # ---------------------------------------------------------------------------
 # Format-agnostic helpers — handle both new (agentId/teamCode/possessionAgentId)
@@ -113,6 +116,40 @@ def possession_context(game_state: dict, team_id: int, my_player_id: int) -> tup
     _, opp_goal_x = get_goal_positions(team_id)
     d_goal = round(dist(me.get("position", {}) or {}, {"x": opp_goal_x, "y": 0}))
     return (1 if holder is me else 0), d_goal
+
+
+def observability_context(game_state: dict, team_id: int, my_player_id: int) -> dict:
+    """Structured fields for CloudWatch DECISION / concede-goal analysis."""
+    ball = game_state.get("ball", {}) or {}
+    ball_pos = ball.get("position", {}) or {}
+    score = game_state.get("score", {}) or {}
+    players = game_state.get("players", []) or []
+    me = next((p for p in players
+               if _player_idx(p) == my_player_id and _is_my_team(p, team_id)), None)
+    my_goal_x, opp_goal_x = get_goal_positions(team_id)
+    me_pos = (me.get("position", {}) or {}) if me else {}
+    holder = resolve_holder(ball, players)
+    opp_holder = holder is not None and not _is_my_team(holder, team_id)
+
+    out = {
+        "hs": int(score.get("home", 0) or 0),
+        "as": int(score.get("away", 0) or 0),
+        "bx": round(float(ball_pos.get("x", 0) or 0), 1),
+        "by": round(float(ball_pos.get("y", 0) or 0), 1),
+        "ob": 1 if opp_holder else 0,
+    }
+    if me_pos:
+        out["mx"] = round(float(me_pos.get("x", 0) or 0), 1)
+        out["my"] = round(float(me_pos.get("y", 0) or 0), 1)
+        out["dmg"] = round(dist(me_pos, {"x": my_goal_x, "y": 0}))
+        out["dog"] = round(dist(me_pos, {"x": opp_goal_x, "y": 0}))
+    play_mode = game_state.get("playMode")
+    if play_mode and play_mode not in ("OPEN_PLAY", "", 0):
+        out["pm"] = str(play_mode)
+    match_id = game_state.get("matchId") or game_state.get("match_id") or game_state.get("id")
+    if match_id and isinstance(match_id, str) and len(match_id) >= 8:
+        out["mid"] = match_id
+    return out
 
 
 def _coach_orders(game_state: dict) -> str:
@@ -227,6 +264,38 @@ def summarize_state(
         else:
             lines.append(f"ASSIGNMENT: P{_player_idx(presser)} presses the carrier — you cut a passing lane / mark a runner instead of chasing.")
 
+    # Compact shape + proximity cues when defending; GK clearance when pressed.
+    if me and my_team:
+        me_pos = me.get("position", {}) or {}
+        gk_press = tuning_mod.clamp(
+            "gk_crowd_dist",
+            (tuning_mod._DATA.get("GK") or {}).get("gk_crowd_dist", 24.0))
+        if (position_label == "GK" and resolve_holder(ball, players) is me
+                and any(dist(me_pos, o.get("position", {}) or {}) <= gk_press
+                        for o in opponents)):
+            lines.append(
+                "GK PRESSURE: opponent on you — SHOOT clearance NOW, never short "
+                "GK_DISTRIBUTE or PASS.")
+        elif (position_label == "GK" and resolve_holder(ball, players) is me):
+            lines.append(
+                "GK SAFE: no pressure — GK_DISTRIBUTE method=KICK to the most "
+                "advanced MID/FWD; only SHOOT if every lane is blocked.")
+        elif not we_have_ball and _player_idx(me) != 0:
+            mates = [p for p in my_team
+                     if _player_idx(p) != my_player_id and _player_idx(p) != 0]
+            if mates:
+                nearest_m = min(mates, key=lambda p: dist(p.get("position", {}) or {}, me_pos))
+                d_mate = dist(me_pos, nearest_m.get("position", {}) or {})
+                if d_mate > 16:
+                    lines.append(
+                        f"SHAPE: {d_mate:.0f}m from nearest teammate — tuck in, stay compact as a block.")
+            near_opps = [o for o in opponents
+                         if dist(me_pos, o.get("position", {}) or {}) <= 20]
+            if near_opps and possession_id is not None:
+                lines.append(
+                    f"DEFEND: {len(near_opps)} opponent(s) within 20m — MARK TIGHT or PRESS, "
+                    "do not stand off.")
+
     lines.append("")
 
     # My player info
@@ -248,6 +317,17 @@ def summarize_state(
         )
         if stam < 25:
             lines.append("LOW STAMINA: avoid sprint unless it creates a shot — walk into position instead.")
+        if has_ball:
+            from tactics import _best_shot_aim
+            aim, _, _ = _best_shot_aim(pos, opp_goal_x, opponents)
+            lines.extend(forecast_prompt_lines(
+                pos, team_id, position_label, True,
+                ticks=int(tuning_mod.get("shoot_lead_ticks", 2)),
+                per_tick=float(tuning_mod.get("shoot_lead_per_tick", 6.0)),
+                longshot_max=float(tuning_mod.get("longshot_max", 58.0)),
+                opp_half_line=5.0,
+                aim=aim,
+            ))
     lines.append("")
 
     # Teammates

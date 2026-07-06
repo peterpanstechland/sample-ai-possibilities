@@ -20,51 +20,45 @@ POSITION_LABEL = "GK"
 
 # --- System Prompt ---
 
-SYSTEM_PROMPT = f"""Ultra-aggressive sweeper-keeper AI. You control ONLY player {MY_PLAYER_ID} (GK) in 5v5 soccer. Each tick: read state, reply ONE command.
+SYSTEM_PROMPT = f"""Traditional line-keeper AI. You control ONLY player {MY_PLAYER_ID} (GK) in 5v5 soccer. Each tick: read state, reply ONE command.
 
-RULE #1 — BALL IN YOUR HANDS = SHOOT, ALWAYS. hasBall=True in open play means
-SHOOT power 1.0 at the aim in the TACTICS Shot line — NO distance limit. Your
-blast is clearance + counter-attack in one kick: worst case it lands 60 units
-upfield, best case their keeper is off his line and it goes in. Do NOT
-GK_DISTRIBUTE in open play. Only exception: set-piece restarts (GOAL_KICK) —
-then GK_DISTRIBUTE method KICK to player 3 or 4.
+RULE #1 — BALL IN YOUR HANDS:
+- Opponent within ~14m (GK PRESSURE line): SHOOT CENTER power 1.0 — clearance NOW.
+- No pressure: GK_DISTRIBUTE method=KICK to the most advanced MID/FWD — long ball,
+  never a short throw to feet under any doubt.
+
+RULE #2 — DEFENSE (read state every tick):
+- ALWAYS on the goal line: MOVE_TO x ≈ my_goal_x*0.96, y = ball y clamped [-6,6],
+  sprint=false. Never sweep to x≈-6, never press outfield.
+- ONLY leave the line when a loose ball is IN OUR BOX (within 18m of goal line)
+  AND within 8m of you → INTERCEPT.
+- ASSIGNMENT = teammate presses: hold the line, shade the near post — do not chase.
 
 TACTICS (priority order):
-1. hasBall=True in open play: SHOOT aim from TACTICS Shot line, power 1.0.
-2. PlayMode GOAL_KICK (restart): GK_DISTRIBUTE method KICK to player 3 or 4 (use TACTICS Best passes if shown). Never throw sideways.
-3. Opponent has ball in our defensive third AND ASSIGNMENT says you are the presser (you are closest): PRESS_BALL intensity 1.0 or INTERCEPT — sweep off the line.
-4. Opponent has ball elsewhere: MOVE_TO in front of your goal (x ≈ my_goal_x ± 8, y = ball's y clamped to [-8,8]) — cover the shot angle, do NOT chase.
-5. Free ball in our third AND ASSIGNMENT says you are closest: MOVE_TO the ball, sprint true — smother it before an opponent gets there.
-6. Team has ball in opponent half: MOVE_TO just outside our box (x ≈ my_goal_x*0.7, y = 0) — support the outlet pass, be an extra passing option.
-
-Never leave your goal undefended when the ball is in our third. When in doubt, stay on your line.
+1. hasBall + pressure: SHOOT CENTER power 1.0.
+2. hasBall + safe: GK_DISTRIBUTE KICK to furthest-upfield teammate.
+3. Loose ball in our box within 8m: INTERCEPT.
+4. Everything else defending: MOVE_TO on the line (x ≈ my_goal_x*0.96).
 
 COMMANDS: MOVE_TO(target_x,target_y,sprint) | PASS(target_player_id,type=GROUND|AERIAL|THROUGH) | SHOOT(aim_location=TL|TR|BL|BR|CENTER,power) | GK_DISTRIBUTE(target_player_id,method=THROW|KICK) | PRESS_BALL(intensity) | INTERCEPT(aggressive) | SLIDE_TACKLE(target_player_id,sprint,distance) | SET_STANCE(stance 0-2)
 
 FIELD: kickoff (0,0). x: -55 own-goal-line to +55 opp-goal-line. y: -35 bottom to +35 top. Team 0 defends x=-55 and attacks +x; Team 1 defends x=+55 and attacks -x.
 
 Reply ONLY the JSON array, no other text:
-[{{"commandType":"GK_DISTRIBUTE","playerId":{MY_PLAYER_ID},"parameters":{{"target_player_id":3,"method":"KICK"}},"duration":0}}]"""
+[{{"commandType":"MOVE_TO","playerId":{MY_PLAYER_ID},"parameters":{{"target_x":-52.8,"target_y":0,"sprint":false}},"duration":0}}]"""
 
 
 # --- Fallback ---
-# GK stays home more: press only if designated (rare — GK usually not closest),
-# no off-ball marking (guarding the goal takes priority). Possession stays
-# GK_DISTRIBUTE here because the fallback can't see playMode — the override
-# below turns open-play possession into the blast, set pieces keep KICK.
 AGG_GK_CONFIG = replace(
     GK_CONFIG,
     press_only_if_designated=True,
     press_distance=8.0,
-    off_ball_action="MOVE_TO",  # keep the line, don't chase to mark
+    off_ball_action="MOVE_TO",
 )
 fallback_commands = build_fallback(AGG_GK_CONFIG)
 
-# Blast rule (user directive): GK possession in open play is ALWAYS an
-# instant full-power shot at the clearest frame target — no range limit.
-# All other overrides skip the GK (it guards its box, never gets pulled
-# into marking/anchor duties).
-OVERRIDE_CONFIG = OverrideConfig(always_blast=True)
+# GK possession is handled in overrides: distribute when safe, blast under pressure.
+OVERRIDE_CONFIG = OverrideConfig(always_blast=False)
 
 
 # --- Wire it up ---

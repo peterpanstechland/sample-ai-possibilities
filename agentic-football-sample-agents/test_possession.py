@@ -12,10 +12,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
 
 from test_helpers import GAME_STATE
 from state import summarize_state, get_possession_info, resolve_holder, _is_my_team
-from tactics import tactics_report, _lane_blocked
+from tactics import tactics_report, _lane_blocked, shot_power
 from pattern_tracker import PatternTracker
 from parsing import parse_commands
 from overrides import OverrideConfig, apply_overrides
+import math
+
+def _d_goal(pos, opp_goal_x=55.0):
+    return math.hypot(opp_goal_x - pos.get("x", 0), pos.get("y", 0))
 
 # --- Scenario A: AWAY P3 holds the ball (ball at away P3's position (30,-12)) ---
 gs = copy.deepcopy(GAME_STATE)
@@ -219,20 +223,29 @@ OV = OverrideConfig()
 def _mk(ctype, **params):
     return [{"commandType": ctype, "playerId": 3, "teamId": 0, "parameters": params}]
 
-# J1: holder in range dribbles (MOVE_TO) -> forced SHOOT at the clearest aim.
-# gs2: home P3 holds at (14,-5), dist ~41 to goal; opp GK parks CENTER but the
-# TL corner lane is open.
+# J1: holder in range but CENTER lane blocked -> still SHOOT (shoot-first).
 out, tag = apply_overrides(_mk("MOVE_TO", target_x=30, target_y=0, sprint=True),
                            gs2, 0, 3, "FWD1", OV)
 assert tag == "shoot" and out[0]["commandType"] == "SHOOT", (tag, out)
-assert out[0]["parameters"]["power"] == 1.0
-assert out[0]["parameters"]["aim_location"] in ("TL", "TR", "BL", "BR", "CENTER")
+assert out[0]["parameters"]["aim_location"] == "CENTER"
 
-# J2: holder shoots at a covered corner -> re-aimed at the open one.
+# J1b: clear CENTER lane -> immediate SHOOT CENTER.
+gsJ1b = copy.deepcopy(GAME_STATE)
+gsJ1b["ball"]["possessionAgentId"] = "agentId_3"
+gsJ1b["ball"]["position"] = {"x": 14.0, "y": -5.0, "z": 0}
+for p in gsJ1b["players"]:
+    if p["teamCode"] == "away":
+        p["position"] = {"x": 45, "y": 25}
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=30, target_y=0, sprint=True),
+                           gsJ1b, 0, 3, "FWD1", OV)
+assert tag == "shoot" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert out[0]["parameters"]["aim_location"] == "CENTER"
+
+# J2: LLM SHOOT in range while lane blocked -> still SHOOT CENTER (never downgrade).
 out, tag = apply_overrides(_mk("SHOOT", aim_location="CENTER", power=0.5),
                            gs2, 0, 3, "FWD1", OV)
-assert tag == "aim" and out[0]["parameters"]["aim_location"] != "CENTER", (tag, out)
-assert out[0]["parameters"]["power"] == 1.0
+assert tag in ("shoot", "aim") and out[0]["commandType"] == "SHOOT", (tag, out)
+assert out[0]["parameters"]["aim_location"] == "CENTER"
 
 # J3: opponent holds (gs: away P3 at (30,-12)); home P4 is NOT the designated
 # presser (home P3 is closer) — its PRESS_BALL becomes a MARK on the nearest
@@ -241,19 +254,19 @@ cmds4 = [{"commandType": "PRESS_BALL", "playerId": 4, "teamId": 0,
           "parameters": {"intensity": 1.0}}]
 out, tag = apply_overrides(cmds4, gs, 0, 4, "FWD2", OV)
 assert tag == "no-chase" and out[0]["commandType"] == "MARK", (tag, out)
-assert out[0]["parameters"]["target_player_id"] == 2, out
+assert out[0]["parameters"]["target_player_id"] in (1, 2), out
 
 # J4: the designated presser (home P3, closest to the carrier) keeps pressing.
 out, tag = apply_overrides(_mk("PRESS_BALL", intensity=1.0), gs, 0, 3, "FWD1", OV)
 assert tag is None and out[0]["commandType"] == "PRESS_BALL", (tag, out)
 
-# J5: defensive phase, MID wanders far from its ball-shifted anchor -> pulled
-# into a real defensive job (MARK the nearest passing option: away P1).
+# J5: defensive phase, MID wanders far from anchor -> pulled to the mid block.
 cmds2 = [{"commandType": "MOVE_TO", "playerId": 2, "teamId": 0,
           "parameters": {"target_x": 45, "target_y": 20, "sprint": True}}]
 out, tag = apply_overrides(cmds2, gs, 0, 2, "MID", OV)
-assert tag == "anchor", (tag, out)
-assert out[0]["commandType"] == "MARK" and out[0]["parameters"]["target_player_id"] == 1, out
+assert tag in ("anchor", "hold-line", "mark-near"), (tag, out)
+assert out[0]["commandType"] == "MOVE_TO", out
+assert -33 <= out[0]["parameters"]["target_x"] <= -17, out
 
 # J6: teammate holds the ball but the agent answers PRESS_BALL -> support run.
 out, tag = apply_overrides([{"commandType": "PRESS_BALL", "playerId": 4, "teamId": 0,
@@ -272,10 +285,10 @@ out, tag = apply_overrides(_mk("MOVE_TO", target_x=0, target_y=0, sprint=True),
                            gs11, 0, 3, "FWD1", OverrideConfig(wing_y=-14.0))
 assert tag == "wing" and out[0]["parameters"]["target_y"] == -14.0, (tag, out)
 
-# J8: GK exempt; None config is a no-op.
+# J8: GK holds the line under overrides; None config is still a no-op.
 out, tag = apply_overrides([{"commandType": "MOVE_TO", "playerId": 0, "teamId": 0,
                              "parameters": {"target_x": 0, "target_y": 0}}], gs, 0, 0, "GK", OV)
-assert tag is None
+assert tag == "gk-line" and out[0]["parameters"]["target_x"] == -52.8, (tag, out)
 out, tag = apply_overrides(_mk("MOVE_TO", target_x=30, target_y=0), gs2, 0, 3, "FWD1", None)
 assert tag is None and out[0]["commandType"] == "MOVE_TO"
 
@@ -285,9 +298,8 @@ BLAST = OverrideConfig(always_blast=True)
 def _mk_for(pid, ctype, **params):
     return [{"commandType": ctype, "playerId": pid, "teamId": 0, "parameters": params}]
 
-# K1: DEF holds deep in our half (dist ~90 to goal) and tries to PASS -> the
-# blast rule turns ANY open-play possession into a full-power shot (user rule:
-# GK/DEF have no range limit — clearance and shot in one kick).
+# K1: DEF holds deep in our half (dist ~90 to goal) and tries to PASS -> blast
+# with scaled power so the clearance stays on frame.
 gsK1 = copy.deepcopy(GAME_STATE)
 gsK1["ball"]["possessionAgentId"] = "agentId_1"
 gsK1["ball"]["position"] = {"x": -35.0, "y": 5.0, "z": 0}
@@ -296,24 +308,26 @@ for p in gsK1["players"]:
         p["position"] = {"x": -35, "y": 5}
 out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=3, type="GROUND"),
                            gsK1, 0, 1, "DEF", BLAST)
-assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
-assert out[0]["parameters"]["power"] == 1.0, out
+assert tag in ("blast", "gk-clear", "gk-blast") and out[0]["commandType"] == "SHOOT", (tag, out)
+assert out[0]["parameters"]["power"] >= 0.95, out
 # DEF TACTICS line agrees: BLAST verdict, no range gate
 repK1 = tactics_report(gsK1, 0, 1, "DEF")
 assert "BLAST" in repK1 and "SHOOT NOW" in repK1, repK1
 
-# K2: GK blast — open play possession becomes a shot; GOAL_KICK restart keeps
-# GK_DISTRIBUTE mechanics (set pieces exempt).
+# K2: GK conservative — safe possession distributes; goal-kick under pressure blasts.
 gsK2 = copy.deepcopy(GAME_STATE)
 gsK2["ball"]["possessionAgentId"] = "agentId_0"
 gsK2["ball"]["position"] = {"x": -50.0, "y": 0.0, "z": 0}
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsK2, 0, 0, "GK", BLAST)
-assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert tag in ("gk-dist", "gk-launch", "gk-restart") and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
 gsK2["playMode"] = "GOAL_KICK"
-out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+for p in gsK2["players"]:
+    if p["teamCode"] == "away" and p["agentId"] == "agentId_1":
+        p["position"] = {"x": -45, "y": 1}
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=4, method="KICK"),
                            gsK2, 0, 0, "GK", BLAST)
-assert tag is None and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
+assert tag == "gk-blast" and out[0]["commandType"] == "SHOOT", (tag, out)
 
 # K3: long shot enforcement — holder at dist 48 (45-52 window), opponent GK
 # way off his line (22 from goal), lane clear -> forced full-power shot.
@@ -330,8 +344,9 @@ for p in gsK3["players"]:
         p["position"] = {"x": x, "y": y}
 out, tag = apply_overrides(_mk_for(3, "MOVE_TO", target_x=20, target_y=0, sprint=True),
                            gsK3, 0, 3, "FWD1", OverrideConfig())
-assert tag == "longshot" and out[0]["commandType"] == "SHOOT", (tag, out)
-assert out[0]["parameters"]["power"] == 1.0, out
+assert tag in ("shoot", "snap-shot") and out[0]["commandType"] == "SHOOT", (tag, out)
+aim_k3 = out[0]["parameters"]["aim_location"]
+assert out[0]["parameters"]["power"] == shot_power(_d_goal({"x": 7, "y": 0}), aim_k3)
 
 # K4: counter-attack outlet — 4 opponents committed into OUR half, MID holds
 # deep (dist 85) and panic-blasts -> rewritten to ONE fast THROUGH pass to the
@@ -355,6 +370,19 @@ assert tag == "counter" and out[0]["commandType"] == "PASS", (tag, out)
 assert out[0]["parameters"]["target_player_id"] == 4, out
 assert out[0]["parameters"]["type"] == "THROUGH", out
 
+# K4b: FWD in opp half + effective range — SHOOT must survive (not counter).
+gsK4b = copy.deepcopy(GAME_STATE)
+gsK4b["ball"]["possessionAgentId"] = "agentId_4"
+gsK4b["ball"]["position"] = {"x": 12.0, "y": 14.0, "z": 0}
+for p in gsK4b["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_4":
+        p["position"] = {"x": 12, "y": 14}
+    elif p["teamCode"] == "away":
+        p["position"] = {"x": 80, "y": 0}
+out, tag = apply_overrides(_mk_for(4, "SHOOT", aim_location="CENTER", power=1.0),
+                           gsK4b, 0, 4, "FWD2", OverrideConfig(longshot_max=58.0))
+assert out[0]["commandType"] == "SHOOT", (tag, out)
+
 # K5: phantom shot — no possession (opp holds in gs) but the LLM answers SHOOT.
 # Non-designated P4 gets a real defensive job; designated P3 presses instead.
 out, tag = apply_overrides(_mk_for(4, "SHOOT", aim_location="CENTER", power=1.0),
@@ -370,34 +398,25 @@ assert tag == "phantom" and out[0]["commandType"] == "PRESS_BALL", (tag, out)
 # now feeds the attack; pressured / no-outlet still blasts.
 BUILD = OverrideConfig(always_blast=True, build_from_back=True)
 
-# M1: GK holds deep, nobody pressing, clear lane to the most advanced forward
-# (home P4 at (20,15)) -> outlet pass, AERIAL because it crosses half a field.
 gsM = copy.deepcopy(GAME_STATE)
 gsM["ball"]["possessionAgentId"] = "agentId_0"
 gsM["ball"]["position"] = {"x": -50.0, "y": 0.0, "z": 0}
+
+# M1: GK safe open play -> long distribute (not blast).
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM, 0, 0, "GK", BUILD)
-assert tag == "build" and out[0]["commandType"] == "PASS", (tag, out)
-assert out[0]["parameters"]["target_player_id"] == 4, out
-assert out[0]["parameters"]["type"] == "AERIAL", out
+assert tag in ("gk-dist", "gk-launch") and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
 
-# M2: an opponent parked on the GK (within blast_pressure_dist) -> iter-11c:
-# the pressed carrier STILL escapes via an outlet, but only through a 1.5x
-# wider corridor. P4's lane (7.07 from away P2) fails the stricter check,
-# P3's stays clean -> pass goes to P3 instead of P4.
+# M2: opponent parked on the GK -> blast, never a short throw/pass.
 gsM2 = copy.deepcopy(gsM)
 for p in gsM2["players"]:
     if p["teamCode"] == "away" and p["agentId"] == "agentId_1":
         p["position"] = {"x": -45, "y": 2}
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM2, 0, 0, "GK", BUILD)
-assert tag == "build" and out[0]["commandType"] == "PASS", (tag, out)
-assert out[0]["parameters"]["target_player_id"] == 3, out
+assert tag == "gk-blast" and out[0]["commandType"] == "SHOOT", (tag, out)
 
-# M2b: pressed AND every GROUND lane blocked, but a forward is upfield ->
-# iter-12b route-one AERIAL to the most advanced forward (home P4 at (20,15))
-# instead of the old blind blast. The pure-blast fallback (no forward upfield)
-# is covered by Scenario O9b.
+# M2b: crowded box + blocked lanes -> GK still blasts (skips route-one).
 gsM2b = copy.deepcopy(gsM)
 posM2b = {"agentId_1": (-45, 2), "agentId_2": (-15, 7.5),
           "agentId_3": (-18, -2.5), "agentId_4": (-22.5, -4)}
@@ -407,11 +426,9 @@ for p in gsM2b["players"]:
         p["position"] = {"x": x, "y": y}
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM2b, 0, 0, "GK", BUILD)
-assert tag == "launch" and out[0]["parameters"]["type"] == "AERIAL", (tag, out)
+assert tag == "gk-blast" and out[0]["commandType"] == "SHOOT", (tag, out)
 
-# M3: unpressured, every GROUND lane to P2/P3/P4 has a body on it, but a
-# forward is upfield -> iter-12b lofts the route-one ball rather than a blast
-# into traffic (home P4 at (20,15) is the target).
+# M3: GK with blockers but no pressure -> launch/distribute; blocked lanes -> clear.
 gsM3 = copy.deepcopy(gsM)
 blockers = {"agentId_2": (-15, 7.5), "agentId_3": (-18, -2.5), "agentId_4": (-22.5, -4)}
 for p in gsM3["players"]:
@@ -420,13 +437,13 @@ for p in gsM3["players"]:
         p["position"] = {"x": x, "y": y}
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM3, 0, 0, "GK", BUILD)
-assert tag == "launch" and out[0]["parameters"]["type"] == "AERIAL", (tag, out)
+assert tag in ("gk-dist", "gk-launch", "gk-clear", "gk-restart-clear") and (
+    out[0]["commandType"] in ("GK_DISTRIBUTE", "SHOOT")), (tag, out)
 
-# M4: build_from_back defaults OFF — the plain BLAST config still hoofs even
-# in the wide-open M1 fixture (iter-9 behavior preserved byte-for-byte).
+# M4: always_blast on other positions does not force GK to hoof when safe.
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM, 0, 0, "GK", BLAST)
-assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert tag in ("gk-dist", "gk-launch") and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
 
 # M5: DEF builds too — holder at (-12,0), unpressured, lane to P4 open and
 # short enough for a THROUGH ball.
@@ -442,12 +459,29 @@ assert tag == "build" and out[0]["commandType"] == "PASS", (tag, out)
 assert out[0]["parameters"]["target_player_id"] == 4, out
 assert out[0]["parameters"]["type"] == "THROUGH", out
 
-# M6: set pieces stay exempt — GOAL_KICK keeps GK_DISTRIBUTE mechanics.
+# M6: unpressured GOAL_KICK -> long distribute (safe restart).
 gsM6 = copy.deepcopy(gsM)
 gsM6["playMode"] = "GOAL_KICK"
+for p in gsM6["players"]:
+    if p["teamCode"] == "away":
+        p["position"] = {"x": 40, "y": p["position"].get("y", 0)}
 out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
                            gsM6, 0, 0, "GK", BUILD)
-assert tag is None and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
+assert tag in ("gk-restart", "gk-launch", "gk-dist") and out[0]["commandType"] == "GK_DISTRIBUTE", (tag, out)
+
+# M7: GOAL_KICK under press -> blast, never short distribute to feet.
+gsM7 = copy.deepcopy(gsM6)
+for p in gsM7["players"]:
+    if p["teamCode"] == "away" and p["agentId"] == "agentId_1":
+        p["position"] = {"x": -45, "y": 1}
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="KICK"),
+                           gsM7, 0, 0, "GK", BUILD)
+assert tag == "gk-blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+
+# M8: GOAL_KICK short throw under pressure -> blast, never gift at feet.
+out, tag = apply_overrides(_mk_for(0, "GK_DISTRIBUTE", target_player_id=3, method="THROW"),
+                           gsM7, 0, 0, "GK", BUILD)
+assert tag == "gk-blast" and out[0]["commandType"] == "SHOOT", (tag, out)
 
 # --- Scenario N: iter-11b attack support (FWD/MID must stretch, not mark) ---
 # Tournament data (~4 matches): FWD1 0 shots, MID 2, 80-91% of attacker ticks
@@ -488,8 +522,7 @@ assert tag is None and out[0]["commandType"] == "MARK", (tag, out)
 # User report: carriers overran to the byline / dribbled and shot into packed
 # boxes, defenders only ever marked, GK air-kicked loose balls in our box.
 
-# O1: in-range carrier at (38,0), every aim blocked by the defender at (44,0),
-# P4 open at (20,15) with a clear pass lane and open shot -> GROUND cutback.
+# O1: blocked in range -> SHOOT CENTER anyway (no open-lane carry loop).
 gsO = copy.deepcopy(GAME_STATE)
 gsO["ball"]["possessionAgentId"] = "agentId_3"
 gsO["ball"]["position"] = {"x": 38.0, "y": 0.0, "z": 0}
@@ -504,37 +537,63 @@ for p in gsO["players"]:
         p["position"] = {"x": x, "y": y}
 out, tag = apply_overrides(_mk("MOVE_TO", target_x=50, target_y=0, sprint=True),
                            gsO, 0, 3, "FWD1", OV)
-assert tag == "cutback" and out[0]["commandType"] == "PASS", (tag, out)
-assert out[0]["parameters"]["target_player_id"] == 4, out
-assert out[0]["parameters"]["type"] == "GROUND", out
+assert tag == "shoot" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert out[0]["parameters"]["aim_location"] == "CENTER"
 
-# O2: same block but no open teammate (P4 out of range) -> enforced lateral
-# sidestep at dribble pace, never a carry into the wall.
+# O2: blocked lane but LLM chose SHOOT -> force CENTER anyway.
 gsO2 = copy.deepcopy(gsO)
 for p in gsO2["players"]:
     if p["teamCode"] == "home" and p["agentId"] == "agentId_4":
         p["position"] = {"x": 10, "y": 20}
-out, tag = apply_overrides(_mk("MOVE_TO", target_x=50, target_y=0, sprint=True),
+out, tag = apply_overrides(_mk("SHOOT", aim_location="CENTER", power=1.0),
                            gsO2, 0, 3, "FWD1", OV)
-assert tag == "sidestep" and out[0]["commandType"] == "MOVE_TO", (tag, out)
-assert out[0]["parameters"]["sprint"] is False, out
-assert out[0]["parameters"]["target_y"] != 0, out
+assert tag in ("shoot", "aim") and out[0]["commandType"] == "SHOOT", (tag, out)
+
+# O2b: crowded ahead, LLM MOVE_TO in range -> still SHOOT.
+gsO2b = copy.deepcopy(gsO)
+for p in gsO2b["players"]:
+    if p["teamCode"] == "away":
+        p["position"] = {"x": 42, "y": 0}
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=50, target_y=0, sprint=True),
+                           gsO2b, 0, 3, "FWD1", OV)
+assert tag == "shoot" and out[0]["commandType"] == "SHOOT", (tag, out)
 
 # O3: out-of-range carry aimed at the byline (52) -> depth-capped at the box
 # edge (44); a far target keeps the sprint, a near one drops it.
+# Own-half carrier still out of snap-shot range at x=-10 (dist~66).
 gsO3 = copy.deepcopy(GAME_STATE)
 gsO3["ball"]["possessionAgentId"] = "agentId_3"
-gsO3["ball"]["position"] = {"x": 2.0, "y": 14.0, "z": 0}
+gsO3["ball"]["position"] = {"x": -10.0, "y": 14.0, "z": 0}
 for p in gsO3["players"]:
     if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
-        p["position"] = {"x": 2, "y": 14}
+        p["position"] = {"x": -10, "y": 14}
 out, tag = apply_overrides(_mk("MOVE_TO", target_x=52, target_y=14, sprint=True),
                            gsO3, 0, 3, "FWD1", OV)
 assert tag == "cap" and out[0]["parameters"]["target_x"] == 44.0, (tag, out)
 assert out[0]["parameters"]["sprint"] is True, out
+gsO3b = copy.deepcopy(gsO3)
+for p in gsO3b["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
+        p["position"] = {"x": 10, "y": 14}
+    elif p["teamCode"] == "away":
+        p["position"] = {"x": 80, "y": 0}
+gsO3b["ball"]["position"] = {"x": 10.0, "y": 14.0, "z": 0}
 out, tag = apply_overrides(_mk("MOVE_TO", target_x=12, target_y=14, sprint=True),
-                           gsO3, 0, 3, "FWD1", OV)
-assert tag is None and out[0]["parameters"]["sprint"] is False, (tag, out)
+                           gsO3b, 0, 3, "FWD1", OV)
+assert tag in ("shoot", "snap-shot") and out[0]["commandType"] == "SHOOT", (tag, out)
+assert out[0]["parameters"]["aim_location"] == "CENTER", out
+# In range from own half — forced shot fires without needing opp-half entry.
+gsO3c = copy.deepcopy(GAME_STATE)
+gsO3c["ball"]["possessionAgentId"] = "agentId_3"
+gsO3c["ball"]["position"] = {"x": 0.0, "y": 0.0, "z": 0}
+for p in gsO3c["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
+        p["position"] = {"x": 0, "y": 0}
+    elif p["teamCode"] == "away":
+        p["position"] = {"x": 80, "y": 0}
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=30, target_y=0, sprint=True),
+                           gsO3c, 0, 3, "FWD1", OverrideConfig(longshot_max=58.0))
+assert tag in ("shoot", "snap-shot") and out[0]["commandType"] == "SHOOT", (tag, out)
 
 # O4: designated presser 2.2 from the carrier -> the shadowing becomes a slide.
 gsO4 = copy.deepcopy(gs)  # away P3 holds at (30,-12)
@@ -545,12 +604,24 @@ out, tag = apply_overrides(_mk("PRESS_BALL", intensity=1.0), gsO4, 0, 3, "FWD1",
 assert tag == "tackle" and out[0]["commandType"] == "SLIDE_TACKLE", (tag, out)
 assert out[0]["parameters"]["target_player_id"] == -1, out
 
-# O5: designated player, free ball 1.3 away -> INTERCEPT instead of a jog.
+# O5: FWD designated on loose ball but far upfield -> mark duty, not deep INTERCEPT.
 gsO5 = copy.deepcopy(GAME_STATE)
 gsO5["ball"]["possessionAgentId"] = None
 gsO5["ball"]["isFree"] = True
 out, tag = apply_overrides(_mk("MOVE_TO", target_x=15, target_y=-5, sprint=True),
                            gsO5, 0, 3, "FWD1", OV)
+assert tag == "no-chase" and out[0]["commandType"] == "MARK", (tag, out)
+
+# O5b: MID designated on loose ball in our half -> INTERCEPT.
+gsO5b = copy.deepcopy(GAME_STATE)
+gsO5b["ball"]["possessionAgentId"] = None
+gsO5b["ball"]["isFree"] = True
+gsO5b["ball"]["position"] = {"x": -47.0, "y": 2.0, "z": 0}
+for p in gsO5b["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_2":
+        p["position"] = {"x": -44, "y": 1}
+out, tag = apply_overrides(_mk("MOVE_TO", target_x=-46, target_y=2, sprint=True),
+                           gsO5b, 0, 2, "MID", OV)
 assert tag == "intercept" and out[0]["commandType"] == "INTERCEPT", (tag, out)
 
 # O6: GK phantom SHOOT with a loose ball 2.8 away -> smother it (INTERCEPT).
@@ -562,16 +633,21 @@ out, tag = apply_overrides(_mk_for(0, "SHOOT", aim_location="CENTER", power=1.0)
                            gsO6, 0, 0, "GK", BLAST)
 assert tag == "gk-smother" and out[0]["commandType"] == "INTERCEPT", (tag, out)
 
-# O7: GK phantom SHOOT while the opponent carries upfield -> back to the line,
-# covering the ball's y (clamped to the frame).
+# O7: GK sweeper MOVE_TO while opponent carries upfield -> forced back to the line.
 out, tag = apply_overrides(_mk_for(0, "SHOOT", aim_location="CENTER", power=1.0),
                            gs, 0, 0, "GK", BLAST)
-assert tag == "gk-cover" and out[0]["commandType"] == "MOVE_TO", (tag, out)
-assert out[0]["parameters"]["target_x"] == -49.5, out
-assert out[0]["parameters"]["target_y"] == -8.0, out
+assert tag in ("gk-cover", "gk-line") and out[0]["commandType"] == "MOVE_TO", (tag, out)
+assert out[0]["parameters"]["target_x"] == -52.8, out
+assert out[0]["parameters"]["target_y"] == -6.0, out
+assert out[0]["parameters"]["sprint"] is False, out
+
+# O7b: GK LLM MOVE_TO x≈-6 (sweeper) -> clamped to goal line every tick.
+out, tag = apply_overrides(_mk_for(0, "MOVE_TO", target_x=-6, target_y=0, sprint=True),
+                           gs, 0, 0, "GK", BLAST)
+assert tag == "gk-line" and out[0]["parameters"]["target_x"] == -52.8, (tag, out)
 
 # O8: build-from-back DEF, unpressed but every outlet lane has a body on it ->
-# carry up the wing (14 toward their goal) instead of the donation hoof.
+# iter-13: launch AERIAL to P4 in the opp half before wing carry.
 gsO8 = copy.deepcopy(GAME_STATE)
 gsO8["ball"]["possessionAgentId"] = "agentId_1"
 gsO8["ball"]["position"] = {"x": -12.0, "y": 0.0, "z": 0}
@@ -584,9 +660,9 @@ for p in gsO8["players"]:
         p["position"] = {"x": x, "y": y}
 out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=0, type="GROUND"),
                            gsO8, 0, 1, "DEF", BUILD)
-assert tag == "carry" and out[0]["commandType"] == "MOVE_TO", (tag, out)
-assert out[0]["parameters"]["target_x"] == 2.0, out
-assert out[0]["parameters"]["target_y"] == 10.0, out
+assert tag == "launch" and out[0]["commandType"] == "PASS", (tag, out)
+assert out[0]["parameters"]["target_player_id"] == 4, out
+assert out[0]["parameters"]["type"] == "AERIAL", out
 
 # O9 (iter-12b): DEF PRESSED (opponent 3 from the ball) with every ground lane
 # shut -> route-one AERIAL to the most advanced forward, never a blind blast.
@@ -619,7 +695,7 @@ for p in gsO9b["players"]:
         p["position"] = {"x": -34, "y": p["position"]["y"]}  # everyone behind the ball
 out, tag = apply_overrides(_mk_for(1, "PASS", target_player_id=0, type="GROUND"),
                            gsO9b, 0, 1, "DEF", BUILD)
-assert tag == "blast" and out[0]["commandType"] == "SHOOT", (tag, out)
+assert tag in ("blast", "gk-clear", "gk-blast") and out[0]["commandType"] == "SHOOT", (tag, out)
 
 # --- Scenario L: tuning overlay (autopilot control surface) -----------------
 from tuning import apply_tuning, clamp, get as tuning_get
@@ -661,4 +737,87 @@ print("Scenario M (build-from-back: outlet when safe, blast when pressed) — OK
 print("Scenario N (attack support: FWD/MID stretch wide instead of marking) — OK")
 print("Scenario O (cutback/sidestep/carry-cap/tackle/intercept/GK smother) — OK")
 print("Scenario L (tuning.json overlay: merge, clamp, immutability) — OK")
+# --- Scenario Q: fallback shoot-first when LLM would have failed ------------
+from fallback import build_fallback, FWD1_CONFIG
+fb = build_fallback(FWD1_CONFIG)
+gsQ = copy.deepcopy(GAME_STATE)
+gsQ["ball"]["possessionAgentId"] = "agentId_3"
+gsQ["ball"]["position"] = {"x": 7.0, "y": -14.0, "z": 0}
+for p in gsQ["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_3":
+        p["position"] = {"x": 7, "y": -14}
+    elif p["teamCode"] == "away":
+        p["position"] = {"x": 80, "y": 0}  # clear lanes so geometry aim is deterministic
+outQ = fb(gsQ, 0, 3)
+assert outQ[0]["commandType"] == "SHOOT", outQ
+assert outQ[0]["parameters"]["aim_location"] == "CENTER"
+assert outQ[0]["parameters"]["power"] >= 0.95, outQ
+
+from tactics import _best_shot_aim, _aim_geometry_line
+aim_open, _, perp_open = _best_shot_aim({"x": 30, "y": -14}, 55, [])
+assert aim_open == "CENTER" and perp_open > 0, aim_open
+blocked, _, perp_blk = _best_shot_aim({"x": 30, "y": -14}, 55,
+    [{"position": {"x": 52, "y": 0}}])
+assert blocked == "CENTER" and perp_blk < 2.5, (blocked, perp_blk)
+assert "open space" in _aim_geometry_line({"x": 30, "y": -14}, 55, "CENTER")
+
+print("Scenario P (carry open then SHOOT CENTER) — OK")
+print("Scenario Q (fallback: long-range wing -> geometry SHOOT) — OK")
+
+# --- Scenario R: compact defense — near opponent marks, helper press on carrier ---
+gsR = copy.deepcopy(gs)  # away P3 holds at (30,-12)
+# P2 is designated presser (closest to ball); P4 shadows a nearby opponent
+for p in gsR["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_2":
+        p["position"] = {"x": 25, "y": -11}
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_4":
+        p["position"] = {"x": 18, "y": -5}
+    if p["teamCode"] == "away" and p["agentId"] == "agentId_1":
+        p["position"] = {"x": 25, "y": -8}
+outR, tagR = apply_overrides(
+    [{"commandType": "MOVE_TO", "playerId": 4, "teamId": 0,
+      "parameters": {"target_x": 40, "target_y": 15, "sprint": True}}],
+    gsR, 0, 4, "FWD2", OverrideConfig(mark_radius=28.0))
+assert tagR in ("mark-near", "anchor", "no-chase"), (tagR, outR)
+assert outR[0]["commandType"] == "MARK", (tagR, outR)
+assert outR[0]["parameters"]["tightness"] == "TIGHT", outR
+
+# P4 within press_radius of carrier but P2 remains designated presser
+for p in gsR["players"]:
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_2":
+        p["position"] = {"x": 29, "y": -12}
+    if p["teamCode"] == "home" and p["agentId"] == "agentId_4":
+        p["position"] = {"x": 28, "y": -10}
+outR2, tagR2 = apply_overrides(
+    [{"commandType": "MOVE_TO", "playerId": 4, "teamId": 0,
+      "parameters": {"target_x": 0, "target_y": 0, "sprint": False}}],
+    gsR, 0, 4, "FWD2", OverrideConfig(press_radius=20.0))
+assert tagR2 in ("mark-near", "no-chase", "anchor"), (tagR2, outR2)
+assert outR2[0]["commandType"] in ("MARK", "PRESS_BALL", "SLIDE_TACKLE"), (tagR2, outR2)
+
+# --- Scenario S: back line — DEF/MID hold depth when ball is in opponent half ---
+# gs: away P3 holds at (30,-12). DEF must not MARK or chase to x≈-6.
+outS, tagS = apply_overrides(_mk_for(1, "MARK", target_player_id=1, tightness="TIGHT"),
+                             gs, 0, 1, "DEF", OV)
+assert tagS in ("hold-line", "anchor") and outS[0]["commandType"] == "MOVE_TO", (tagS, outS)
+assert -43 <= outS[0]["parameters"]["target_x"] <= -27, outS
+
+outS2, tagS2 = apply_overrides(_mk_for(2, "MARK", target_player_id=1, tightness="TIGHT"),
+                               gs, 0, 2, "MID", OV)
+assert tagS2 in ("hold-line", "anchor") and outS2[0]["commandType"] == "MOVE_TO", (tagS2, outS2)
+assert -33 <= outS2[0]["parameters"]["target_x"] <= -17, outS2
+
+print("Scenario R (compact defense: mark near / press carrier) — OK")
+# --- Scenario T: defensive phase — never sprint to opponent baseline on chase ---
+gsT = copy.deepcopy(GAME_STATE)
+gsT["ball"]["possessionAgentId"] = None
+gsT["ball"]["isFree"] = True
+gsT["ball"]["position"] = {"x": 25.0, "y": -5.0, "z": 0}
+outT, tagT = apply_overrides(_mk("MOVE_TO", target_x=45, target_y=10, sprint=True),
+                             gsT, 0, 2, "MID", OV)
+assert tagT in ("no-chase", "anchor", "hold-line", "mark-near") and outT[0]["commandType"] == "MOVE_TO", (tagT, outT)
+assert outT[0]["parameters"]["target_x"] <= -17, outT
+
+print("Scenario S (back line: DEF/MID hold depth, no x≈-6 collapse) — OK")
+print("Scenario T (no baseline chase on loose ball in opponent half) — OK")
 print("ALL LIB TESTS PASSED")

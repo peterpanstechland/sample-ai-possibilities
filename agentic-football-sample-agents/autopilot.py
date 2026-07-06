@@ -419,15 +419,21 @@ def main():
                     help="let Nova Lite propose the tuning deltas")
     ap.add_argument("--headed", action="store_true",
                     help="show the browser (watch matches live)")
+    ap.add_argument("--until-wins", type=int, default=0,
+                    help="keep playing until N wins (overrides --iterations)")
     args = ap.parse_args()
 
     bots = [b.strip() for b in args.bots.split(",") if b.strip()]
     unknown = [b for b in bots if b not in BOTS]
     if unknown:
         ap.error(f"unknown bots {unknown}; choose from {sorted(BOTS)}")
-    iterations = 1 if args.once else args.iterations
+    if args.until_wins > 0:
+        iterations = 999
+    else:
+        iterations = 1 if args.once else args.iterations
 
     wins = losses = 0
+    target = args.until_wins
     for i in range(1, iterations + 1):
         try:
             entry = run_iteration(i, bots[(i - 1) % len(bots)], args)
@@ -439,6 +445,9 @@ def main():
             break
         if entry["result"].get("won"):
             wins += 1
+            if target and wins >= target:
+                print(f"\n=== target reached: {wins}W vs {bots[0]} ===")
+                break
         else:
             losses += 1
 

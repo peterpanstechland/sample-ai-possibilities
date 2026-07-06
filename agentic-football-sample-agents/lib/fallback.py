@@ -44,9 +44,10 @@ class FallbackConfig:
     (current, drift to default position) or 'MARK' (tight-mark nearest opponent
     within 25 units)."""
 
-    # Shoot threshold (distance to opp goal) — shoot-first policy:
-    # any look inside 45 is a full-power shot at CENTER, never a dribble
+    # Shoot threshold (distance to opp goal) — shoot-first policy
     shoot_threshold: float = 45.0
+    longshot_max: float = 58.0
+    """Snap-shot range in opponent half (matches override / 2-tick lead)."""
     shoot_aim: str = "CENTER"
     shoot_power: float = 1.0
 
@@ -102,7 +103,7 @@ MID_CONFIG = FallbackConfig(
     possession_action="SHOOT_OR_PASS",
     default_x_factor=0.5, default_x_ref="ball_x", default_y="track_ball_30",
     press_distance=20.0, press_intensity=0.6,
-    shoot_threshold=45.0, shoot_aim="CENTER", shoot_power=1.0,
+    shoot_threshold=45.0, longshot_max=58.0, shoot_power=1.0,
     default_stance=0,
     last_resort_command_type="PRESS_BALL", last_resort_params={"intensity": 0.5},
     last_resort_duration=3,
@@ -114,6 +115,7 @@ FWD1_CONFIG = FallbackConfig(
     support_x_factor=0.5, support_y=-10, support_sprint=True,
     default_x_factor=0.4, default_x_ref="opp_goal", default_y=-8,
     press_distance=20.0, press_intensity=0.7,
+    shoot_threshold=45.0, longshot_max=58.0,
     default_stance=1,
     last_resort_command_type="PRESS_BALL", last_resort_params={"intensity": 0.6},
     last_resort_duration=3,
@@ -125,6 +127,7 @@ FWD2_CONFIG = FallbackConfig(
     support_x_factor=0.5, support_y=10, support_sprint=True,
     default_x_factor=0.4, default_x_ref="opp_goal", default_y=8,
     press_distance=20.0, press_intensity=0.7,
+    shoot_threshold=45.0, longshot_max=58.0,
     default_stance=1,
     last_resort_command_type="PRESS_BALL", last_resort_params={"intensity": 0.6},
     last_resort_duration=3,
@@ -239,11 +242,35 @@ def _cmd(cmd_type: str, pid: int, tid: int, params: dict, duration: int = 0) -> 
             "parameters": params, "duration": duration}
 
 
+def _effective_d_fallback(pos: dict, opp_goal_x: float) -> float:
+    """2-tick lead — same assumption as override snap-shot."""
+    from forecast import carry_lead_m, effective_d_goal
+    lead = carry_lead_m(2, 6.0, None, {}, toward_goal=True)
+    return effective_d_goal(pos, opp_goal_x, lead)
+
+
+def _should_fallback_shoot(cfg: FallbackConfig, pos: dict, opp_goal_x: float,
+                          team_id: int) -> bool:
+    d = dist(pos, {"x": opp_goal_x, "y": 0})
+    if d <= cfg.shoot_threshold:
+        return True
+    return _effective_d_fallback(pos, opp_goal_x) <= cfg.longshot_max
+
+
+def _fallback_shoot(cfg, my_player_id, team_id, pos, opp_goal_x, opponents):
+    from tactics import _best_shot_aim, shot_power
+    aim, _, _ = _best_shot_aim(pos, opp_goal_x, opponents)
+    d_goal = dist(pos, {"x": opp_goal_x, "y": 0})
+    return [_cmd("SHOOT", my_player_id, team_id,
+               {"aim_location": aim, "power": shot_power(d_goal, aim)})]
+
+
 def _on_ball(cfg, game_state, players, team_id, my_player_id, pos, my_goal_x, opp_goal_x):
     """Handle possession for all position types."""
+    opponents = [p for p in players if not _is_my_team(p, team_id)]
+
     if cfg.possession_action == "SHOOT":
-        return [_cmd("SHOOT", my_player_id, team_id,
-                     {"aim_location": cfg.shoot_aim, "power": cfg.shoot_power})]
+        return _fallback_shoot(cfg, my_player_id, team_id, pos, opp_goal_x, opponents)
 
     if cfg.possession_action == "GK_DISTRIBUTE":
         teammates = [p for p in players if _is_my_team(p, team_id) and _player_idx(p) != my_player_id]
@@ -265,10 +292,8 @@ def _on_ball(cfg, game_state, players, team_id, my_player_id, pos, my_goal_x, op
                      {"target_player_id": 2, "type": "GROUND"})]
 
     if cfg.possession_action == "SHOOT_OR_PASS":
-        # <= to match the prompt rule "distOppGoal<=45: SHOOT"
-        if abs(pos.get("x", 0) - opp_goal_x) <= cfg.shoot_threshold:
-            return [_cmd("SHOOT", my_player_id, team_id,
-                         {"aim_location": cfg.shoot_aim, "power": cfg.shoot_power})]
+        if _should_fallback_shoot(cfg, pos, opp_goal_x, team_id):
+            return _fallback_shoot(cfg, my_player_id, team_id, pos, opp_goal_x, opponents)
         forwards = [p for p in players if _is_my_team(p, team_id) and _player_idx(p) in (3, 4)]
         if forwards:
             target = min(forwards, key=lambda p: abs(p.get("position", {}).get("x", 0) - opp_goal_x))
@@ -278,10 +303,8 @@ def _on_ball(cfg, game_state, players, team_id, my_player_id, pos, my_goal_x, op
                      {"target_player_id": 3, "type": "GROUND"})]
 
     if cfg.possession_action == "SHOOT_OR_ADVANCE":
-        # <= to match the prompt rule "distOppGoal<=45: SHOOT"
-        if abs(pos.get("x", 0) - opp_goal_x) <= cfg.shoot_threshold:
-            return [_cmd("SHOOT", my_player_id, team_id,
-                         {"aim_location": cfg.shoot_aim, "power": cfg.shoot_power})]
+        if _should_fallback_shoot(cfg, pos, opp_goal_x, team_id):
+            return _fallback_shoot(cfg, my_player_id, team_id, pos, opp_goal_x, opponents)
         return [_cmd("MOVE_TO", my_player_id, team_id,
                      {"target_x": opp_goal_x * cfg.advance_x_factor,
                       "target_y": cfg.advance_y, "sprint": cfg.advance_sprint})]

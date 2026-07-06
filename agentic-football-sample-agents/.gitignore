@@ -1,8 +1,14 @@
 # Autopilot artifacts
 .portal-profile/
+.portal-profile-test/
 autopilot-logs/
 autopilot_history.jsonl
 bench_models_results.json
+
+# Secrets & local env
+.env
+.env.local
+.env.*.local
 
 # Local deploy logs and toolchains
 deploy-*.log
@@ -10,5 +16,8 @@ deploy-*.log
 .venv-linux/
 **/_build/
 
-# Local match recordings
+# Local match recordings & analytics cache
 training-runs/
+training_logs/
+cloudwatch_logs/
+grind_results.jsonl

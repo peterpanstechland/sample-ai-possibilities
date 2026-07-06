@@ -41,14 +41,21 @@ BOUNDS: dict[str, tuple[float, float]] = {
     "press_bodies": (2, 4),
     "chase_radius": (5.0, 12.0),
     "anchor_slack": (8.0, 18.0),
-    "mark_radius": (15.0, 30.0),
+    "mark_radius": (18.0, 32.0),
+    "press_radius": (12.0, 28.0),
+    "compact_max_spread": (14.0, 28.0),
+    "anchor_slack": (6.0, 14.0),
     "wing_y": (-18.0, 18.0),
     "tackle_dist": (2.0, 6.0),
+    "gk_crowd_dist": (8.0, 28.0),
     "intercept_radius": (6.0, 15.0),
     "carry_cap_x": (38.0, 50.0),
+    "shoot_lead_per_tick": (4.0, 8.0),
+    "shoot_lead_ticks": (1, 3),
+    "opp_half_line": (0.0, 12.0),
 }
 
-_INT_KEYS = {"press_bodies"}
+_INT_KEYS = {"press_bodies", "shoot_lead_ticks"}
 
 
 def _load(path: str = _PATH) -> dict:

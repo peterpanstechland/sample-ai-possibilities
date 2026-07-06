@@ -8,7 +8,10 @@ from strands.models import BedrockModel
 
 from parsing import parse_commands
 from pattern_tracker import PatternTracker
-from state import summarize_state, possession_context, _coach_orders
+from state import (summarize_state, possession_context, observability_context,
+                   _coach_orders, get_goal_positions)
+from forecast import effective_d_goal, carry_lead_m
+import tuning as tuning_mod
 from tactics import tactics_report
 from fallback import FallbackConfig, build_last_resort
 from overrides import OverrideConfig, apply_overrides
@@ -63,7 +66,7 @@ def create_invoke_handler(
     override_cfg = tuned
 
     def log_decision(source, commands, latency_ms, game_state, prompt_chars,
-                     effective_pid=my_player_id, team_id=0, ov=None):
+                     effective_pid=my_player_id, team_id=0, ov=None, want=None):
         """One structured line per tick for CloudWatch Logs Insights.
 
         Fields: pos, tick, t (game seconds), source (llm/fallback/error-fallback/
@@ -71,6 +74,7 @@ def create_invoke_handler(
         hb (had ball 0/1), dg (dist to opponent goal) — the last two let the
         analyzer measure shot discipline on real chances. ov names the tactical
         override that rewrote the LLM command this tick (absent when none).
+        hs/as/bx/by/mx/my/dmg/dog/ob/pm support concede-goal forensics in CW.
         """
         try:
             hb, dg = possession_context(game_state, team_id, effective_pid)
@@ -85,8 +89,26 @@ def create_invoke_handler(
                 "hb": hb,
                 "dg": dg,
             }
+            payload.update(observability_context(game_state, team_id, effective_pid))
+            if hb == 1:
+                _, opp_gx = get_goal_positions(team_id)
+                ticks = int(tuning_mod.get("shoot_lead_ticks", 2))
+                per = float(tuning_mod.get("shoot_lead_per_tick", 6.0))
+                lead = carry_lead_m(ticks, per, None, {}, toward_goal=True)
+                mx, my = payload.get("mx"), payload.get("my")
+                if isinstance(mx, (int, float)) and isinstance(my, (int, float)):
+                    payload["edg"] = round(
+                        effective_d_goal({"x": mx, "y": my}, opp_gx, lead))
             if ov:
                 payload["ov"] = ov
+            if want is not None:
+                payload["want"] = want
+                if want != payload.get("cmd"):
+                    payload["fix"] = 1  # override corrected the LLM this tick
+            if payload.get("cmd") == "SHOOT" and commands:
+                aim = (commands[0].get("parameters") or {}).get("aim_location")
+                if aim:
+                    payload["aim"] = aim
             if _coach_orders(game_state):
                 # Ground truth that live coach instructions reach the prompt
                 # (the user couldn't tell whether injection worked from the UI).
@@ -142,6 +164,7 @@ def create_invoke_handler(
             commands = parse_commands(response_text, team_id, effective_pid)
 
             if commands:
+                want = commands[0].get("commandType")
                 commands, ov = apply_overrides(
                     commands, game_state, team_id, effective_pid,
                     position_label, override_cfg)
@@ -151,14 +174,19 @@ def create_invoke_handler(
                 log.info(f"LLM returned {len(commands)} commands: "
                          f"{[c.get('commandType') for c in commands]}")
                 log_decision("llm", commands, llm_ms, game_state, len(state_summary),
-                             effective_pid, team_id, ov=ov)
+                             effective_pid, team_id, ov=ov, want=want)
                 yield json.dumps(commands)
             else:
                 log.warn(f"LLM parse failed, using fallback. Response: {response_text[:200]}")
                 commands = fallback_fn(game_state, team_id, effective_pid)
+                fb_cmd = commands[0].get("commandType") if commands else None
+                commands, ov = apply_overrides(
+                    commands, game_state, team_id, effective_pid,
+                    position_label, override_cfg)
                 log.info(f"Fallback returned {len(commands)} commands")
-                log_decision("parse-fallback", commands, llm_ms, game_state, len(state_summary),
-                             effective_pid, team_id)
+                log_decision("parse-fallback", commands, llm_ms, game_state,
+                             len(state_summary), effective_pid, team_id, ov=ov,
+                             want=fb_cmd)
                 yield json.dumps(commands)
 
         except Exception as e:
@@ -173,9 +201,13 @@ def create_invoke_handler(
                     team_id,
                     effective_pid,
                 )
+                fb_cmd = commands[0].get("commandType") if commands else None
+                commands, ov = apply_overrides(
+                    commands, prompt_data.get("gameState", {}), team_id,
+                    effective_pid, position_label, override_cfg)
                 log_decision("error-fallback", commands, None,
                              prompt_data.get("gameState", {}), None,
-                             effective_pid, team_id)
+                             effective_pid, team_id, ov=ov, want=fb_cmd)
                 yield json.dumps(commands)
             except Exception:
                 cmd = dict(last_resort)

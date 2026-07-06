@@ -28,15 +28,22 @@ dribbling, NO backward pass. Your blast doubles as a clearance: worst case the
 ball lands 60 units upfield, best case it's a goal. Only exception: set-piece
 restarts (KICK_OFF/FREE_KICK) — then PASS THROUGH to player 3 or 4.
 
-TACTICS (priority order):
-1. hasBall=True: SHOOT aim from TACTICS Shot line, power 1.0. That's it.
-2. Opponent has ball AND ASSIGNMENT says you press: PRESS_BALL intensity 1.0 or SLIDE_TACKLE if within 4 — win the ball, don't shadow the carrier.
-3. Opponent has ball AND ASSIGNMENT says a teammate presses: MARK the opponent's most dangerous player (see TACTICS "Top threat") tightness TIGHT. Cut passing lanes rather than chasing.
-4. OPP HIGH PRESS line shown: drop deeper (x ≈ my_goal_x*0.75), stay between the carrier and our goal — the counter-attack starts with you winning it and blasting it forward.
-5. Team has ball: MOVE_TO just past the halfway line (x ≈ 8 toward opp goal, y = 0), sprint true — you are the safety valve for clearances.
-6. Free ball AND ASSIGNMENT says you are closest: MOVE_TO the ball, sprint true.
+RULE #2 — DEFENSE (read state ASSIGNMENT / DEFEND / SHAPE every tick):
+- You are the presser: PRESS_BALL 1.0; within 5m SLIDE_TACKLE — win the ball.
+- Teammate presses: HOLD THE BACK LINE (MOVE_TO anchor) — screen in front of GK,
+  do NOT chase ball or MARK unless danger is within 35m of our goal.
+- DEFEND line: stay x between my_goal_x*0.78 and my_goal_x*0.50 (≈ -43 to -27
+  for team 0). Never camp at x≈-6.
+- OPP HIGH PRESS: drop to my_goal_x*0.82, block counters.
 
-RESPECT ASSIGNMENT lines — do NOT press when a teammate is designated presser; MARK instead.
+TACTICS (priority order):
+1. hasBall=True: SHOOT CENTER power 1.0.
+2. Opponent has ball AND you are the presser: PRESS_BALL / SLIDE_TACKLE (RULE #2).
+3. Opponent has ball AND teammate presses: MARK TIGHT (RULE #2).
+4. Team has ball: MOVE_TO just past halfway (x ≈ -8, y = 0), sprint.
+5. Defending: HOLD THE LINE — never sprint toward opp_goal_x or the byline.
+
+RESPECT ASSIGNMENT — one presser only; everyone else MARKs.
 
 COMMANDS: MOVE_TO(target_x,target_y,sprint) | PASS(target_player_id,type=GROUND|AERIAL|THROUGH) | SHOOT(aim_location=TL|TR|BL|BR|CENTER,power) | PRESS_BALL(intensity) | INTERCEPT(aggressive) | SLIDE_TACKLE(target_player_id,sprint,distance) | MARK(target_player_id,tightness=LOOSE|TIGHT) | SET_STANCE(stance 0-2)
 
@@ -55,7 +62,7 @@ AGG_DEF_CONFIG = replace(
     press_only_if_designated=True,
     press_distance=10.0,
     off_ball_action="MARK",
-    default_x_factor=0.2, default_x_ref="my_goal",  # sit closer to halfway when off ball
+    default_x_factor=0.78, default_x_ref="my_goal",  # back line, not halfway
     default_y=0,
 )
 fallback_commands = build_fallback(AGG_DEF_CONFIG)

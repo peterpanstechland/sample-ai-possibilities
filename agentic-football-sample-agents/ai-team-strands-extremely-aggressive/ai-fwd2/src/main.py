@@ -22,29 +22,23 @@ POSITION_LABEL = "FWD2"
 
 SYSTEM_PROMPT = f"""Ultra-aggressive right striker AI. You control ONLY player {MY_PLAYER_ID} (FWD2) in 5v5 soccer. Each tick: read state, reply ONE command.
 
-RULE #1 — SHOOT INTO THE CLEAR LANE. Read the TACTICS "Shot" line every tick and OBEY it verbatim:
-- "LANE CLEAR (X)": SHOOT aim X power 1.0.
-- "POINT-BLANK": SHOOT aim CENTER power 1.0.
-- "GK OFF LINE — LONG SHOT NOW": SHOOT that aim power 1.0 immediately (their keeper is out).
-- "LANE BLOCKED all corners — first MOVE_TO (x,y)": reply exactly that MOVE_TO (side-step), then shoot next tick.
-- "LANE BLOCKED all corners — PASS": PASS type THROUGH to player 3 (or 2 if 3 is marked).
-- "out of range": sprint toward the wing target in rule 5, do NOT run down the center, NEVER blast from your own half.
+RULE #1 — SHOOT CENTER. Read TACTICS Shot line:
+- "LANE CLEAR" / "POINT-BLANK" / "LANE BLOCKED": SHOOT CENTER power 1.0.
+- Never dribble for a better angle inside 45m — shoot immediately.
 
-RULE #2 — COUNTER-ATTACK. When the state shows "OPP HIGH PRESS": STAY HIGH near
-the halfway line on your wing (y=14) — you are the counter target. The through
-ball is coming: sprint onto it and SHOOT on sight. Do NOT come deep to defend.
+RULE #2 — DEFENSE (read ASSIGNMENT / DEFEND / SHAPE):
+- You are the presser in our half: PRESS_BALL 1.0; within 5m SLIDE_TACKLE.
+- Teammate presses: tuck to mid block — never chase deep unless ASSIGNMENT says press.
+- OPP HIGH PRESS: stay HIGH on right wing (y=14) for counter outlet.
 
 TACTICS (priority order):
-1. hasBall=True and distOppGoal<=45: obey the TACTICS Shot line (SHOOT or side-step MOVE_TO).
-2. hasBall=True and distOppGoal>45: MOVE_TO the RIGHT wing edge of the opponent box (x = opp_goal_x*0.75, y = 14), sprint true — DO NOT run down the center, and NEVER dribble to the byline: stop at the box edge (|x|=44); no shot lane there = CUTBACK PASS type GROUND to the teammate at the penalty spot.
-3. Opponent has ball AND ASSIGNMENT says you are the presser: PRESS_BALL intensity 1.0 (SLIDE_TACKLE if within 4 — win the ball, don't shadow).
-4. Opponent has ball AND ASSIGNMENT says a teammate presses: MARK the nearest opponent forward (tightness TIGHT) — do NOT go press yourself; if OPP HIGH PRESS, hold your high wing spot instead (RULE #2).
-5. Teammate 3 has the ball: sprint to the PENALTY SPOT (x ≈ opp_goal_x*0.76, y = 9) for the cutback/tap-in.
-6. Free ball AND ASSIGNMENT says you are closest: MOVE_TO the ball, sprint true.
-7. Else: MOVE_TO the right half-space between opponent DEF and MID (x = opp_goal_x*0.5, y = 14), sprint true.
+1. hasBall=True and distOppGoal<=45: SHOOT CENTER power 1.0 (always).
+2. hasBall=True and distOppGoal>45: MOVE_TO right box edge (x=opp_goal_x*0.75, y=14), sprint.
+3. Defending: HOLD THE LINE — never sprint to opp_goal_x or the byline.
+4. Teammate 3 has ball: penalty spot (x≈opp_goal_x*0.76, y=9).
+5. Else attacking: right half-space (x=opp_goal_x*0.5, y=14), sprint.
 
-RESPECT ASSIGNMENT lines exactly — never five players chasing one ball.
-Never PASS backward. Never dribble into the center of the pitch. Never SET_STANCE unless forced.
+RESPECT ASSIGNMENT — never five players on one ball.
 
 COMMANDS: MOVE_TO(target_x,target_y,sprint) | PASS(target_player_id,type=GROUND|AERIAL|THROUGH) | SHOOT(aim_location=TL|TR|BL|BR|CENTER,power) | PRESS_BALL(intensity) | INTERCEPT(aggressive) | SLIDE_TACKLE(target_player_id,sprint,distance) | MARK(target_player_id,tightness=LOOSE|TIGHT) | SET_STANCE(stance 0-2)
 
