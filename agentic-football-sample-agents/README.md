@@ -285,6 +285,16 @@ $env:PYTHONIOENCODING = "utf-8"
 ```
 agentic-football-sample-agents/
 ├── lib/                              # 共享库（所有队伍共用）
+├── docs/
+│   └── OBSERVABILITY.md              # 观测台 / Analytics 部署指南（推荐阅读）
+├── observe_dashboard.py              # 本地 Web 观测台 + Analytics + Settings
+├── analyze_match.py                  # CLI 比赛日志分析
+├── grind_matches.py                  # 批量 Portal 练习赛
+├── portal_bot.py                     # Portal Playwright 自动化
+├── autopilot.py                      # 自动迭代（约赛→分析→调参→部署）
+├── requirements-observability.txt  # 观测台 / 门户工具依赖
+├── .env.example                      # 环境变量模板（复制为 .env，勿提交）
+├── screenshot/                       # 观测台界面截图（中/英）
 ├── deploy-wsl.sh                     # Windows 推荐：WSL 一键部署脚本
 ├── ai-team-strands-balanced/
 │   ├── deploy-all.sh                 # macOS / Linux / WSL 部署脚本
@@ -302,23 +312,34 @@ agentic-football-sample-agents/
 
 ## 比赛观测（Observability）
 
-Agent 每个 tick 会向 CloudWatch Logs 写一条结构化 `DECISION` 日志（延迟、指令、决策来源、prompt 大小）。两种查看方式：
+> **完整部署说明**（环境变量、页面功能、批量约赛、常见问题）见 **[docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)**。
 
-### 网页观测台（推荐）
+Agent 每个 tick 会向 CloudWatch Logs 写一条结构化 `DECISION` 日志。本仓库提供 **本地 Web 观测台**（无需额外部署到 AWS）：
+
+| 页面 | URL | 功能 |
+|------|-----|------|
+| 观测台 | http://localhost:8777/ | 实战 / 训练场 / 对比：延迟、射门、指令分布 |
+| 比赛分析 | http://localhost:8777/analytics | 按场比分、热力图、AI 调参建议（中/英） |
+| 设置 | http://localhost:8777/settings | AWS 凭证、CloudWatch 数据下载 |
+
+### 快速开始
 
 ```powershell
-.venv\Scripts\python observe_dashboard.py --prefix agg_    # 打开 http://localhost:8777
+pip install -r requirements-observability.txt
+copy .env.example .env          # 填入 Workshop AWS 凭证
+$env:AWS_DEFAULT_REGION = "us-east-1"
+.\.venv\Scripts\python.exe observe_dashboard.py --prefix agg_ --minutes 180 --port 8777
 ```
 
-本地网页，每 30 秒自动刷新，展示每个 agent 的：决策来源占比（LLM vs fallback）、延迟 p50/p95、**射门次数**、**把握射门**（持球进入 45 射程时真的射了几次——衡量策略是否被执行的核心指标）、指令分布、调优建议，以及全队延迟散点图。参数：`--prefix`（runtime 名前缀，如 `agg_`）、`--minutes`、`--port`、`--region`。
+- 默认读本地 `cloudwatch_logs/` 缓存；点 **Refresh data** 才同步 CloudWatch。
+- 场次列表结合 `grind_results.jsonl` 时间窗切分；无日志的场次显示 Portal 比分。
+- 批量约赛：`python grind_matches.py --count 10 --bot aggressive`（需 Playwright + 队伍码）。
 
 ### 命令行报告
 
 ```powershell
-.venv\Scripts\python analyze_match.py --minutes 45 --prefix agg_
+.venv\Scripts\python analyze_match.py --minutes 180 --prefix agg_
 ```
-
-打完一场比赛后运行，输出逐 agent 的统计与调优建议（例如「FWD1 一直在带球不射门」）。
 
 ### 本地训练场（不用部署就能测策略）
 
@@ -327,15 +348,14 @@ Agent 每个 tick 会向 CloudWatch Logs 写一条结构化 `DECISION` 日志（
 .venv\Scripts\python training_ground.py --llm    # 真实调用 Nova Micro（需要 AWS 凭证）
 ```
 
-把 5 个 agent 灌入约 23 个典型场景（开球、进攻梯度、防守、追自由球、落后/领先残局、教练指令），
-产出与实战完全同格式的 DECISION 日志（写入 `training_logs/*.jsonl`）。
-观测台切到「训练场」看单独数据，切到「对比：实战 vs 训练」逐位置对比射门率、MOVE_TO 率、延迟——
-若实战射门率明显低于训练，通常是实战状态注入或对手压迫的问题，而不是提示词本身。
+把 5 个 agent 灌入约 23 个典型场景，产出与实战同格式的 DECISION 日志（写入 `training_logs/*.jsonl`）。
+观测台切到「训练场」或「对比：实战 vs 训练」查看差异。
 
 ### 实时调整队员（教练指令）
 
 比赛过程中在 Player Portal 发送的 teamChat 消息会作为 `COACH ORDER` 注入所有 agent 的提示词，
 优先级高于既定战术——比如打字「全员压上，多射门」即可实时改变全队行为，不需要重新部署。
+也可通过 `portal_bot.py coach` 自动场边教练（见下文 Autopilot 一节）。
 
 ---
 
@@ -446,6 +466,8 @@ iter-9 的回答是把「对方压上 → 我们打身后」变成代码级流�
 | 文件 | 作用 |
 |------|------|
 | `portal_bot.py` | Playwright 驱动 [agentic-football.aws.dev](https://agentic-football.aws.dev/)：队伍码登录（会话持久化在 `.portal-profile/`）、`POST /practice-matches` 约 bot 练习赛（balanced=The Benchmark FC / aggressive=Total Attack United / defensive=Fort Knox Athletic）、打开真实观赛页、轮询终场比分、可发教练指令 |
+| `grind_matches.py` | 连续打 N 场练习赛（无自动调参），结果写入 `grind_results.jsonl`，供 Analytics 按场切分 |
+| `observe_dashboard.py` | 本地 Web 观测台 + Analytics + Settings（见 [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)） |
 | `portal_bot.LiveCoach` | **AI 场边教练（比赛进行中实时喊话）**：每 10s 轮询 `/matches/{id}/narration` 实时事件流（进球带比分、射门、压迫、终场哨），按「局势 → 门户预设指令」决策后 POST `/coach-instructions`。游戏引擎会把最新教练指令注入全部 5 个 agent 的提示词（`lib/state.py` 的 COACH ORDER 顶级优先），一句话同时转向全队 |
 | `lib/tuning.py` + `lib/tuning.json` | **部署期调参面**：autopilot 只改 `tuning.json`，agent 启动时叠加到各自的 `OverrideConfig` 上（global → 按位置覆盖）。所有数值被 `BOUNDS` 钳制，调参器永远写不出离谱值；文件为空 = 行为与 iter-9 完全一致 |
 | `autopilot.py` | 循环编排：比赛 → `collect_kpis()`（射门纪律 / 远射浪费 / 控球高度 / 被围攻指标）→ 调参（默认规则调参器，`--llm-advisor` 让 Nova Lite 在同样的 BOUNDS 内提案）→ WSL 逐 agent 重部署（S3 超时自动重试、凭证过期立即停）→ `autopilot_history.jsonl` 记录每轮配置与结果 |

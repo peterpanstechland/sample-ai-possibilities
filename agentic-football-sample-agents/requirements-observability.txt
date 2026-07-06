@@ -1,0 +1,8 @@
+# Observability dashboard, analytics, portal automation, and CLI tools.
+# Install after creating a venv (see docs/OBSERVABILITY.md).
+
+boto3>=1.34.0
+botocore>=1.34.0
+
+# portal_bot.py, grind_matches.py, autopilot.py
+playwright>=1.40.0
